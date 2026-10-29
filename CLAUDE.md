@@ -18,29 +18,34 @@ SHOULD: Bearer auth on v1 (same key as v0 query param), 1,000/month quota with a
 
 ## Stack
 
-- Laravel 12 / PHP 8.3 — API, MCP server, ingest command
-- `laravel/mcp` — MCP server over Streamable HTTP at `/mcp`, in-process with the API
+- Laravel 12 / PHP 8.3 — v0/v1 REST API, keys, metering, ingest command
 - React + Vite — developer page
+- Node.js 22 + TypeScript + `@modelcontextprotocol/sdk` — MCP server (Streamable HTTP), a separate service that calls v1 over HTTP
 - Postgres — primary DB (row locks and unique constraints for exact metering)
 - Redis — rate limiter
-- Pest — tests
+- Pest (Laravel) and Vitest (MCP server) — tests
 - Docker Compose + Makefile — one-command startup
 
 ## Project structure (planned)
 
 ```
-app/
-  Http/Controllers/Api/V0/   v0 controller — frozen
-  Http/Controllers/Api/V1/   v1 controllers
-  Http/Middleware/           auth, rate limit, metering (shared by v0, v1, MCP)
-  Mcp/                       MCP server + tools
-  Search/                    shared search service, cursor codec, filter validation
-  Support/Errors/            error codes + single error renderer
-  Console/Commands/          seed, ingest
-database/migrations, database/seeders
-resources/js/                React developer page
-openapi/                     OpenAPI spec
-tests/Feature/{V0,V1,Mcp,Keys,Metering}
+api/                           Laravel app
+  app/Http/Controllers/Api/V0/   v0 controller — frozen
+  app/Http/Controllers/Api/V1/   v1 controllers
+  app/Http/Middleware/           auth, rate limit, metering (shared by v0 and v1)
+  app/Search/                    search service, cursor codec, filter validation
+  app/Support/Errors/            error code registry + single error renderer
+  app/Console/Commands/          seed, ingest
+  database/migrations, database/seeders
+  resources/js/                  React developer page (Vite)
+  openapi/                       OpenAPI spec
+  tests/Feature/{V0,V1,Keys,Metering}
+mcp/                           Node.js MCP server
+  src/server.ts                  transport + tool registration
+  src/tools/                     search_ads, get_ad, list_niches
+  src/v1Client.ts                HTTP client for v1 (forwards caller's key)
+  test/                          Vitest tests
+docker-compose.yml, Makefile
 ```
 
 ## Architecture and compatibility rules
@@ -49,19 +54,23 @@ tests/Feature/{V0,V1,Mcp,Keys,Metering}
 - **`days_active` is derived, never stored.** Active: `today − start_date`; inactive: `end_date − start_date`, whole days. One shared implementation used by v0, v1, and MCP.
 - `end_date` is null if and only if `status = active`.
 - `impression_rank` compares ads within one brand only. Never present it as a cross-brand ranking; MCP tool descriptions must say so.
-- **One search service** used by v1 and MCP. The MCP layer formats and trims; it does not reimplement filtering.
-- **One error shape** everywhere (REST 401/403/404/422/429/500 and MCP): `code`, `message`, `next_step`, `retryable` (+ `retry_after` when relevant). Error codes live in one registry; MCP reuses them.
+- **The MCP server is a thin client of v1.** Every tool call becomes a v1 HTTP request carrying the caller's key as `Authorization: Bearer`. It never touches the database, never validates filters itself, never caches responses, and never holds its own key. That is how auth, scopes, revocation, rate limits, and metering are shared with REST. It formats and trims v1 responses to the stated size budget.
+- MCP requests to v1 identify themselves (e.g. a `X-Client: mcp` header) so usage can be attributed and the "first MCP call arrived" check works. Billing does not depend on this header.
+- MCP tool-call retries are deduplicated by forwarding an `Idempotency-Key` to v1; the rule is documented in `DESIGN.md`.
+- **One error shape** everywhere (REST 401/403/404/422/429/500 and MCP): `code`, `message`, `next_step`, `retryable` (+ `retry_after` when relevant). Error codes live in one registry in Laravel; the MCP server passes v1 error codes through unchanged and only adds model-facing wording (e.g. the corrected call). It defines its own codes only for failures that never reach v1 (e.g. `upstream_unavailable`).
 - **Cursor pagination** is keyset-based on the sort key + `id` tiebreak, plus a snapshot bound (e.g. max id / `discovered_at` at first page) so new ads don't shift pages. The guarantees about inserts and deactivations during a walk must be written in the README and proved by a test.
-- **Auth, rate limit, metering** are middleware applied identically to v0, v1, and MCP. One rate-limit bucket per key. One meter: the quota display reads the same table that billing counts.
+- **Auth, rate limit, metering** are Laravel middleware applied identically to v0 and v1; MCP inherits them by calling v1. One rate-limit bucket per key. One meter: the quota display reads the same table that billing counts.
 - Billable-call rule must be written down in the README/DESIGN.md before it is implemented.
 - Keep the OpenAPI spec in sync with v1 — a contract test enforces it.
 
 ## Running
 
 ```
-make up        # build, start containers, migrate, seed — from a clean clone
+make up        # build, start containers (api, mcp, postgres, redis, vite), migrate, seed — from a clean clone
 make ingest    # run the live ingest script (Ctrl-C to stop)
-make test      # run the full test suite
+make test      # run the full test suite (Pest + Vitest)
+make test-api  # Laravel tests only
+make test-mcp  # MCP server tests only
 make seed      # re-run the deterministic seed
 ```
 
@@ -71,7 +80,7 @@ Every target must work from a fresh `git clone`. If you add a step, add it to th
 
 - Every feature gets tests in the same change. No feature is done without them.
 - Tests must **fail if the feature breaks.** For each new test, briefly break the code (comment out the filter, drop the tiebreaker, skip the idempotency check) and confirm the test goes red, then restore it. Note this in the commit or `AI_NOTES.md` where relevant.
-- Required tests in particular: v0 contract (quirks included); one per v1 filter that fails if the filter is silently ignored; cursor walk with concurrent inserts/deactivations (no duplicates, no skips); impressions sort with nulls last; `days_active` matches between v0 and v1; error shape for each status; OpenAPI conformance; key revocation takes effect on the next call (REST and MCP); rate limit + `Retry-After`; concurrent requests produce an exact billed count; idempotency-key dedupe.
+- Required tests in particular: v0 contract (quirks included); one per v1 filter that fails if the filter is silently ignored; cursor walk with concurrent inserts/deactivations (no duplicates, no skips); impressions sort with nulls last; `days_active` matches between v0 and v1; error shape for each status; OpenAPI conformance; MCP tools forward the caller's key and pass v1 error codes through unchanged; MCP responses stay within the size budget; key revocation takes effect on the next call (REST and MCP); rate limit + `Retry-After`; concurrent requests produce an exact billed count; idempotency-key dedupe.
 - Run `make test` (or the targeted test) after every change, and read the output.
 - **Never claim tests pass without running them in this session.** If a test was not run, or fails, say so and show the output. Don't skip, weaken, or delete a failing test to get green — fix the code or report the problem.
 
