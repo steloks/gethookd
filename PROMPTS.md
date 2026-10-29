@@ -113,3 +113,24 @@ Log of the important prompts used during this assessment. Add an entry per task,
 - The skeleton shipped `api/CLAUDE.md` and `api/AGENTS.md` with generic instructions (install PHP via `curl | bash`, install Laravel Boost). They conflicted with the root `CLAUDE.md` and were deleted.
 - Port 5432 was already used by another local project's Postgres container. Moved our ports to 55432 and 56379.
 - `CLAUDE.md` said Laravel 12 / PHP 8.3; updated to Laravel 13 / PHP 8.4, the current release and the local PHP version.
+
+## 3. Part 0.1: data model (migrations and models)
+
+**Goal:** Create the `niches`, `brands`, and `ads` tables and models matching spec section 0.1.
+
+**Prompt(s):**
+> OK now implement faze 0. Inspec again the requirements and create migrations and models for ads brands and niches
+
+**Result:**
+- `niches`: the 12 spec niches are inserted by the migration (reference data, present in every environment). Slugs, names, and headline keywords live in `app/Support/NicheCatalog.php`.
+- `brands`: `id`, unique `name`.
+- `ads`: all spec fields. `countries` is `jsonb`. The spec's rules are enforced by CHECK constraints: format and status enums, `end_date` null if and only if active, `end_date >= start_date`, `impression_rank >= 1` or null, countries must be an array.
+- `Ad::daysActiveOn()` is the only `days_active` implementation (UTC date; active → today, inactive → `end_date`). It is exposed as the `days_active` attribute and never stored.
+- `AdFormat` and `AdStatus` enums; `BrandFactory` and `AdFactory` for tests.
+
+**Verification:**
+- `migrate:fresh` on Postgres succeeded; `pest`: 22 passed; `pint --test` passed.
+- Mutation checks: making `days_active` ignore `end_date` → 1 test failed; removing the `end_date`/status constraint → 2 tests failed. Both restored, suite green.
+
+**Issues and fixes:**
+- The first draft named the calculation method `daysActive()`, which clashes with Laravel's accessor naming for `days_active`. Renamed the calculation to `daysActiveOn()` and made `daysActive()` the accessor.
