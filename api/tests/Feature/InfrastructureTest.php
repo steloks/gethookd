@@ -14,3 +14,8 @@ it('can reach Redis', function () {
 
     expect(Cache::store('redis')->get('infra-check'))->toBe('ok');
 });
+
+it('runs every database session in UTC', function () {
+    expect(config('database.connections.pgsql.timezone'))->toBe('UTC')
+        ->and(DB::selectOne('SHOW timezone')->TimeZone)->toBe('UTC');
+});

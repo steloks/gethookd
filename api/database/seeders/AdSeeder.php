@@ -2,11 +2,9 @@
 
 namespace Database\Seeders;
 
-use App\Enums\AdFormat;
 use App\Enums\AdStatus;
 use App\Models\Niche;
 use App\Seeding\SyntheticAdText;
-use App\Support\CountryCatalog;
 use App\Support\NicheCatalog;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Seeder;
@@ -137,12 +135,12 @@ class AdSeeder extends Seeder
                 'niche_id' => $nicheId,
                 'headline' => $this->text->headline($slug, NicheCatalog::keywords($slug)),
                 'body_text' => $this->text->bodyText($slug),
-                'format' => $this->pickFormat()->value,
+                'format' => $this->text->format()->value,
                 'status' => ($isActive[$i] ? AdStatus::Active : AdStatus::Inactive)->value,
                 'start_date' => $startDate->toDateString(),
                 'end_date' => $endDate?->toDateString(),
                 'impression_rank' => $hasNullRank[$i] ? null : 0, // real ranks assigned per brand below
-                'countries' => json_encode($this->countries()),
+                'countries' => json_encode($this->text->countries()),
                 'discovered_at' => $this->discoveredAt($startDate, $endDate ?? $anchor, $anchor),
             ];
         }
@@ -204,27 +202,6 @@ class AdSeeder extends Seeder
         }
 
         return $brands[$low];
-    }
-
-    private function pickFormat(): AdFormat
-    {
-        $roll = $this->random->getInt(1, 100);
-
-        return match (true) {
-            $roll <= 50 => AdFormat::Image,
-            $roll <= 85 => AdFormat::Video,
-            default => AdFormat::Carousel,
-        };
-    }
-
-    /**
-     * @return list<string>
-     */
-    private function countries(): array
-    {
-        $keys = $this->random->pickArrayKeys(CountryCatalog::CODES, $this->random->getInt(1, 4));
-
-        return array_map(fn (int $key) => CountryCatalog::CODES[$key], $keys);
     }
 
     /**

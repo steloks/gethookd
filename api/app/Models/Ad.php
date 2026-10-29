@@ -79,11 +79,13 @@ class Ad extends Model
      */
     public function daysActiveOn(?CarbonInterface $today = null): int
     {
+        // Compare calendar dates as UTC midnights; the date casts use the app timezone, which may not be UTC.
+        $start = CarbonImmutable::parse($this->start_date->toDateString(), 'UTC');
         $until = $this->status === AdStatus::Active
             ? CarbonImmutable::instance($today ?? CarbonImmutable::now())->utc()->startOfDay()
-            : $this->end_date;
+            : CarbonImmutable::parse($this->end_date->toDateString(), 'UTC');
 
-        return (int) $this->start_date->diffInDays($until);
+        return (int) $start->diffInDays($until);
     }
 
     /**

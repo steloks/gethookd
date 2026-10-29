@@ -57,8 +57,8 @@ it('seeds rows that respect the data model', function () {
     $violations = DB::selectOne(<<<'SQL'
         SELECT
             sum((end_date > DATE '2026-10-29')::int) AS ends_after_anchor,
-            sum((discovered_at::date < start_date)::int) AS discovered_before_start,
-            sum((discovered_at::date > coalesce(end_date, DATE '2026-10-29'))::int) AS discovered_after_end,
+            sum(((discovered_at AT TIME ZONE 'UTC')::date < start_date)::int) AS discovered_before_start,
+            sum(((discovered_at AT TIME ZONE 'UTC')::date > coalesce(end_date, DATE '2026-10-29'))::int) AS discovered_after_end,
             sum((jsonb_array_length(countries) = 0)::int) AS no_countries
         FROM ads
     SQL);

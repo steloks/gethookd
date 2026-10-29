@@ -2,10 +2,12 @@
 
 namespace App\Seeding;
 
+use App\Enums\AdFormat;
+use App\Support\CountryCatalog;
 use Random\Randomizer;
 
 /**
- * Generates synthetic brand names and ad copy from fixed word lists.
+ * Generates synthetic brand names, ad copy, formats and countries from fixed lists.
  *
  * Shared by the deterministic seeder (seeded engine) and the live ingest (random engine).
  * Word lists avoid substrings of other niches' keywords ("ring" in "during", "tent" in "content")
@@ -119,6 +121,32 @@ final class SyntheticAdText
         $text[] = ucfirst("pair it with our {$product}.");
 
         return implode(' ', $text);
+    }
+
+    /**
+     * Image 50%, video 35%, carousel 15%.
+     */
+    public function format(): AdFormat
+    {
+        $roll = $this->random->getInt(1, 100);
+
+        return match (true) {
+            $roll <= 50 => AdFormat::Image,
+            $roll <= 85 => AdFormat::Video,
+            default => AdFormat::Carousel,
+        };
+    }
+
+    /**
+     * One to four distinct codes from the catalog.
+     *
+     * @return list<string>
+     */
+    public function countries(): array
+    {
+        $keys = $this->random->pickArrayKeys(CountryCatalog::CODES, $this->random->getInt(1, 4));
+
+        return array_map(fn (int $key) => CountryCatalog::CODES[$key], $keys);
     }
 
     /**

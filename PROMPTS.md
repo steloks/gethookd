@@ -199,3 +199,91 @@ Log of the important prompts used during this assessment. Add an entry per task,
 
 **Issues and fixes:**
 - My first timezone test (Auckland 01:00) passed even with the UTC conversion removed. Without the conversion the calculation compares exact moments, so both versions rounded to 0. Replaced with a New York 22:00 case (already the next day in UTC), which fails without the fix.
+
+## 6. Part 0.3: live ingest
+
+**Goal:** A script that runs until stopped and, every second, inserts 1–5 new ads and deactivates 1–2 active ones, with about 30% of new ads having a `start_date` up to 90 days in the past.
+
+**Prompt(s):**
+> @test-auditor make a review again
+
+> Add a script that continuously inserts 1–5 ads per second and deactivates 1–2 ads per cycle, as specified in the assessment.
+
+**Result:**
+- Second test-auditor pass: no Critical/High; 3 Low. One (max + 1 rank rule not enforced) is handled here. Two timezone hardening items (`days_active` assumes the app timezone is UTC; one seeder test casts `discovered_at::date` in the session timezone) are **not done yet**.
+- `php artisan ads:ingest [--ticks=N] [--interval=ms]` (`app/Console/Commands/IngestAds.php`): one cycle per second (sleeps for the rest of the interval). Ctrl-C/SIGTERM finishes the current cycle and exits 0.
+- `app/Ingest/AdIngestor.php`: each cycle is one transaction.
+  - Inserts 1–5 ads, discovered now: 30% start 1–90 days earlier, the rest today. 40% have no rank; the rest get the brand's max + 1 under a brand row lock.
+  - Stops 1–2 ads that existed before the cycle (status `inactive`, `end_date` today).
+  - Clear error if the database has not been seeded.
+- `SyntheticAdText` now also provides `format()` and `countries()` (moved from the seeder; golden hash unchanged).
+
+**Verification:**
+- Manual: `ads:ingest --ticks=3` on the dev DB, and a run stopped with SIGINT (exit 0, finished the current cycle). Inspected the new and stopped rows in psql.
+- `tests/Feature/Ingest/AdIngestorTest.php` (7 tests): per-cycle counts and row values over 20 cycles (including backdated ads); stopped ads were active and end today, other rows unchanged; proportions over 300 cycles; existing ranks never change and each brand stays 1..k; no active ads left; unseeded DB; the command with `--ticks`.
+- Mutation checks, each caught by a failing test:
+  - new ad takes rank 1 and shifts the others;
+  - rank max + 2;
+  - no backdating;
+  - at most 3 inserts;
+  - stopped ads end on their start date;
+  - same-cycle inserts can be stopped;
+  - `discovered_at` set to the start date.
+- Full suite 41 passed; Pint clean.
+
+**Issues and fixes:**
+- I assumed a query-builder `updateReturning()` that Laravel does not have; replaced with a parameterised `UPDATE … RETURNING`.
+- `discovered_at` has whole-second precision and Postgres rounded fractional seconds up (a timestamp slightly in the future); now truncated.
+- The rank snapshot test compared unordered `pluck()` results and failed on row order; added `orderBy('id')`.
+- The first "discovered now" test checked one cycle with no backdated ad, so setting `discovered_at` to the start date went unnoticed. Now it covers 20 cycles and asserts a backdated ad is in the sample. That version then wrongly expected ads stopped by later cycles to still be active; fixed.
+- Not covered by a test: two ingest processes running at once (the brand row lock is meant to prevent rank collisions). The tests run inside one transaction, so a second connection cannot see the data.
+- `make ingest` does not exist yet; the Makefile comes with the Docker step.
+
+## 7. Ingest audit fixes and timezone hardening
+
+**Goal:** Fix the gaps from the test-auditor's ingest review, plus the two open timezone items.
+
+**Prompt(s):**
+> @test-auditor check the script if its by specifications. I was thinking using scheduler - would it be better?
+
+> Yes, fix them including the timezone ones
+
+**Result:**
+- Scheduler question: kept the long-running `ads:ingest` command. The spec asks for "a script that runs until stopped". A per-second scheduled command would start a new process every second (overhead and overlap) and still needs `schedule:work` running all the time.
+- Audit: ingest meets 0.3, but three plausible regressions passed every test (backdate window shrunk, sleep removed, transaction removed). Two Medium and four Low findings.
+- Code:
+  - `App\Ingest\Cadence::sleepMicroseconds()` (start-to-start timing, never negative).
+  - `--ticks` and `--interval` must be integers of 0 or more (exit code 2 otherwise).
+  - `Ad::daysActiveOn()` compares UTC calendar dates on both sides, independent of the app timezone.
+  - The `pgsql` connection sets `timezone => UTC`.
+  - The seeder test uses `discovered_at AT TIME ZONE 'UTC'`.
+- Tests:
+  - Backdate window reaches near 90 days and down to 1–2 days.
+  - New ads go to the brand's main niche about 85% of the time and use their own niche's keywords, never another niche's.
+  - Exactly one active ad left.
+  - A failing cycle leaves no trace (trigger fails the deactivation step).
+  - A timed run (3 cycles at 200 ms ≥ 400 ms).
+  - Invalid options rejected.
+  - `Cadence` unit tests.
+  - `days_active` under a New York default timezone.
+  - The pgsql session timezone.
+
+**Verification:**
+- Full suite: 54 passed; Pint clean.
+- Mutation checks (one at a time, auto-restored and verified), each caught by a failing test:
+  - backdate 1..7;
+  - backdate 30..90;
+  - main niche ignored;
+  - no transaction;
+  - sleep removed;
+  - cadence ignores time already spent;
+  - no option validation;
+  - `days_active` on app-timezone dates;
+  - pgsql timezone not set.
+
+**Issues and fixes:**
+- **My first mutation script corrupted the source.** It was written for bash, but the shell is zsh, which does not split `$FILES` into words. No backups were made and the "restore" step did nothing, so the mutations piled up in the real files, and the results from that run were invalid. With validation disabled, one test ran ingest forever and hung. I stopped it, found the six leftover mutations by grep, reversed each by exact text replacement, reviewed the code, and confirmed the suite was green. Replaced the script with a Python harness that applies one mutation, restores in `finally`, verifies the file matches the original byte for byte, and runs tests with a timeout.
+- My first "no transaction" mutation was invalid: it returned a closure instead of running it, so the test failed for the wrong reason. Redone properly.
+- With no transaction, the atomicity test fails because the outer test transaction is aborted (SQLSTATE 25P02), not at its count assertion. That is still a correct failure; a comment in the test explains it.
+- The negative `--interval` case hung without validation (it fell through to "run until stopped"). It now passes `--ticks=1`, so a missing check fails instead of hanging.
+- Limitation: the pgsql timezone test catches a missing config entry, but its `SHOW timezone` check cannot fail on our server because the server default is already UTC.

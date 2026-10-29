@@ -97,6 +97,8 @@ return [
             'prefix_indexes' => true,
             'search_path' => 'public',
             'sslmode' => env('DB_SSLMODE', 'prefer'),
+            // Dates such as end_date "today" and discovered_at::date are UTC whatever the server default is.
+            'timezone' => 'UTC',
         ],
 
         'sqlsrv' => [

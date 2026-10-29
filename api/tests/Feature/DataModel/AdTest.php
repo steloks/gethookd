@@ -137,6 +137,21 @@ describe('days_active', function () {
         expect($ad->daysActiveOn($today))->toBe(1);
     });
 
+    it('does not depend on the app timezone', function () {
+        $default = date_default_timezone_get();
+        date_default_timezone_set('America/New_York');
+
+        try {
+            $active = Ad::factory()->make(['start_date' => '2026-10-04']);
+            $inactive = Ad::factory()->inactive('2026-10-04')->make(['start_date' => '2026-10-01']);
+
+            expect($active->daysActiveOn(CarbonImmutable::parse('2026-10-05 00:30:00', 'UTC')))->toBe(1)
+                ->and($inactive->days_active)->toBe(3);
+        } finally {
+            date_default_timezone_set($default);
+        }
+    });
+
     it('is not stored in the database', function () {
         expect(Schema::hasColumn('ads', 'days_active'))->toBeFalse();
     });
