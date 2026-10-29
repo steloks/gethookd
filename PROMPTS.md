@@ -88,3 +88,28 @@ Log of the important prompts used during this assessment. Add an entry per task,
 **Issues and fixes:**
 - The initial recommendation put the MCP server in-process with `laravel/mcp`. The decision was changed to a separate Node.js MCP server, and `CLAUDE.md` was updated: the MCP server became a thin v1 client that forwards the caller's key, so auth, rate limits, and metering stay shared.
 - The subagents have Bash so they can run tests, which means "read-only" relies on their instructions rather than on a hard tool restriction. This is noted as a known trade-off; Bash can be removed for a hard guarantee.
+
+## 2. Laravel init
+
+**Goal:** Scaffold the Laravel API project on PostgreSQL with a working test setup.
+
+**Prompt(s):**
+> We are going to use postgresql for database
+
+> OK. Start with the laravel init
+
+**Result:**
+- `api/`: Laravel 13.39 skeleton (PHP 8.4), with Pest 5 replacing PHPUnit-only tests and `predis` as the Redis client.
+- `docker-compose.yml`: PostgreSQL 16 and Redis 7 on host ports 55432 and 56379. An init script creates the `gethookd_test` database.
+- `.env.example` and `phpunit.xml` point at Postgres and Redis; tests use `gethookd_test`, and feature tests use `RefreshDatabase`.
+- `tests/Feature/InfrastructureTest.php`: asserts that tests run on Postgres (`gethookd_test`) and that Redis is reachable.
+
+**Verification:**
+- `php artisan migrate` on Postgres succeeded.
+- `./vendor/bin/pest`: 4 passed, 6 assertions.
+- Pointed `phpunit.xml` at the dev database, confirmed the infrastructure test failed, then restored it.
+
+**Issues and fixes:**
+- The skeleton shipped `api/CLAUDE.md` and `api/AGENTS.md` with generic instructions (install PHP via `curl | bash`, install Laravel Boost). They conflicted with the root `CLAUDE.md` and were deleted.
+- Port 5432 was already used by another local project's Postgres container. Moved our ports to 55432 and 56379.
+- `CLAUDE.md` said Laravel 12 / PHP 8.3; updated to Laravel 13 / PHP 8.4, the current release and the local PHP version.

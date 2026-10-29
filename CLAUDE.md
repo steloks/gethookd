@@ -18,12 +18,12 @@ SHOULD: Bearer auth on v1 (same key as v0 query param), 1,000/month quota with a
 
 ## Stack
 
-- Laravel 12 / PHP 8.3 — v0/v1 REST API, keys, metering, ingest command
+- Laravel 13 / PHP 8.4 — v0/v1 REST API, keys, metering, ingest command
 - React + Vite — developer page
 - Node.js 22 + TypeScript + `@modelcontextprotocol/sdk` — MCP server (Streamable HTTP), a separate service that calls v1 over HTTP
-- Postgres — primary DB (row locks and unique constraints for exact metering)
-- Redis — rate limiter
-- Pest (Laravel) and Vitest (MCP server) — tests
+- PostgreSQL 16 — primary DB (row locks and unique constraints for exact metering); tests use the separate `gethookd_test` database, never SQLite
+- Redis 7 (via `predis`) — rate limiter and cache
+- Pest 5 (Laravel) and Vitest (MCP server) — tests
 - Docker Compose + Makefile — one-command startup
 
 ## Project structure (planned)
@@ -45,8 +45,11 @@ mcp/                           Node.js MCP server
   src/tools/                     search_ads, get_ad, list_niches
   src/v1Client.ts                HTTP client for v1 (forwards caller's key)
   test/                          Vitest tests
+docker/                        container config (postgres init creates gethookd_test)
 docker-compose.yml, Makefile
 ```
+
+Host ports: Postgres `55432`, Redis `56379` (non-default to avoid clashing with other local stacks).
 
 ## Architecture and compatibility rules
 
