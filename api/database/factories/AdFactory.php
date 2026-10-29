@@ -12,6 +12,9 @@ use Illuminate\Database\Eloquent\Factories\Factory;
 /**
  * Builds single ads for tests. Bulk, deterministic data comes from the seeder, not this factory.
  *
+ * Defaults are fixed, not random, so a filter or sort test can only pass because of the
+ * values it sets itself. The copy contains no niche keyword, so it never matches a keyword search by accident.
+ *
  * @extends Factory<Ad>
  */
 class AdFactory extends Factory
@@ -23,20 +26,18 @@ class AdFactory extends Factory
      */
     public function definition(): array
     {
-        $startDate = fake()->dateTimeBetween('-2 years', 'today');
-
         return [
             'brand_id' => Brand::factory(),
-            'niche_id' => fn () => Niche::query()->inRandomOrder()->value('id'),
-            'headline' => fake()->sentence(6),
-            'body_text' => fake()->paragraph(),
-            'format' => fake()->randomElement(AdFormat::cases()),
+            'niche_id' => fn () => Niche::query()->where('slug', 'kitchen')->value('id'),
+            'headline' => 'Plain test headline',
+            'body_text' => 'Plain test body.',
+            'format' => AdFormat::Image,
             'status' => AdStatus::Active,
-            'start_date' => $startDate->format('Y-m-d'),
+            'start_date' => '2026-01-01',
             'end_date' => null,
-            'impression_rank' => fake()->numberBetween(1, 50),
-            'countries' => fake()->randomElements(['US', 'GB', 'DE', 'FR', 'CA', 'AU', 'NL', 'ES'], fake()->numberBetween(1, 3)),
-            'discovered_at' => $startDate,
+            'impression_rank' => null,
+            'countries' => ['US'],
+            'discovered_at' => '2026-01-02 00:00:00+00',
         ];
     }
 
@@ -48,9 +49,9 @@ class AdFactory extends Factory
         ]);
     }
 
-    public function withoutImpressions(): static
+    public function ranked(int $rank): static
     {
-        return $this->state(['impression_rank' => null]);
+        return $this->state(['impression_rank' => $rank]);
     }
 
     public function inNiche(string $slug): static

@@ -10,6 +10,8 @@ use Illuminate\Database\Eloquent\Factories\Factory;
  */
 class BrandFactory extends Factory
 {
+    private static int $next = 0;
+
     /**
      * Define the model's default state.
      *
@@ -18,7 +20,7 @@ class BrandFactory extends Factory
     public function definition(): array
     {
         return [
-            'name' => fake()->unique()->company(),
+            'name' => 'Test Brand '.++self::$next,
         ];
     }
 }

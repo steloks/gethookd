@@ -57,6 +57,8 @@ Host ports: Postgres `55432`, Redis `56379` (non-default to avoid clashing with 
 - **`days_active` is derived, never stored.** Active: `today − start_date`; inactive: `end_date − start_date`, whole days. One shared implementation used by v0, v1, and MCP.
 - `end_date` is null if and only if `status = active`.
 - `impression_rank` compares ads within one brand only. Never present it as a cross-brand ranking; MCP tool descriptions must say so.
+- `impression_rank` is unique per brand (partial unique index). Existing ranks are never rewritten, because that would move ads under a live impressions cursor. New ads get NULL or the brand's current max + 1.
+- Test factories use fixed defaults (`AdFactory`: kitchen niche, no keyword in copy, null rank). Tests set every value they assert on.
 - **The MCP server is a thin client of v1.** Every tool call becomes a v1 HTTP request carrying the caller's key as `Authorization: Bearer`. It never touches the database, never validates filters itself, never caches responses, and never holds its own key. That is how auth, scopes, revocation, rate limits, and metering are shared with REST. It formats and trims v1 responses to the stated size budget.
 - MCP requests to v1 identify themselves (e.g. a `X-Client: mcp` header) so usage can be attributed and the "first MCP call arrived" check works. Billing does not depend on this header.
 - MCP tool-call retries are deduplicated by forwarding an `Idempotency-Key` to v1; the rule is documented in `DESIGN.md`.

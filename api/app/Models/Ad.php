@@ -80,7 +80,7 @@ class Ad extends Model
     public function daysActiveOn(?CarbonInterface $today = null): int
     {
         $until = $this->status === AdStatus::Active
-            ? CarbonImmutable::parse(($today ?? CarbonImmutable::now('UTC'))->toDateString())
+            ? CarbonImmutable::instance($today ?? CarbonImmutable::now())->utc()->startOfDay()
             : $this->end_date;
 
         return (int) $this->start_date->diffInDays($until);

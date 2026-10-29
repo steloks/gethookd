@@ -4,6 +4,7 @@ use App\Enums\AdFormat;
 use App\Enums\AdStatus;
 use App\Models\Ad;
 use App\Models\Brand;
+use Carbon\CarbonImmutable;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -71,6 +72,29 @@ it('allows a null impression_rank', function () {
     expect(DB::table('ads')->whereNull('impression_rank')->count())->toBe(1);
 });
 
+describe('impression_rank is unique within a brand', function () {
+    it('rejects two ads of one brand with the same rank', function () {
+        $brand = Brand::factory()->create();
+        Ad::factory()->for($brand)->ranked(1)->create();
+
+        expect(fn () => Ad::factory()->for($brand)->ranked(1)->create())->toThrow(QueryException::class);
+    });
+
+    it('allows the same rank at different brands', function () {
+        Ad::factory()->ranked(1)->create();
+        Ad::factory()->ranked(1)->create();
+
+        expect(Ad::query()->where('impression_rank', 1)->count())->toBe(2);
+    });
+
+    it('allows many ads of one brand without impression data', function () {
+        $brand = Brand::factory()->create();
+        Ad::factory()->for($brand)->count(3)->create();
+
+        expect($brand->ads()->whereNull('impression_rank')->count())->toBe(3);
+    });
+});
+
 describe('days_active', function () {
     beforeEach(fn () => $this->travelTo('2026-10-05 15:30:00'));
 
@@ -92,11 +116,25 @@ describe('days_active', function () {
         expect($ad->days_active)->toBe(0);
     });
 
+    it('is zero for an inactive ad that ended the day it started', function () {
+        $ad = Ad::factory()->inactive('2026-08-01')->make(['start_date' => '2026-08-01']);
+
+        expect($ad->days_active)->toBe(0);
+    });
+
     it('uses the UTC date, not the time of day', function () {
         $this->travelTo('2026-10-05 23:59:59');
         $ad = Ad::factory()->make(['start_date' => '2026-10-04']);
 
         expect($ad->days_active)->toBe(1);
+    });
+
+    it('counts "today" in UTC even when given a time in another timezone', function () {
+        // 22:00 on Oct 4 in New York is already Oct 5 (02:00) in UTC.
+        $today = CarbonImmutable::parse('2026-10-04 22:00:00', 'America/New_York');
+        $ad = Ad::factory()->make(['start_date' => '2026-10-04']);
+
+        expect($ad->daysActiveOn($today))->toBe(1);
     });
 
     it('is not stored in the database', function () {
