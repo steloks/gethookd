@@ -1,6 +1,10 @@
 <?php
 
+use App\Auth\ApiKeys;
+use App\Enums\ApiScope;
+use App\Support\LocalUser;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
 /*
@@ -44,7 +48,22 @@ expect()->extend('toBeOne', function () {
 |
 */
 
-function something()
+/**
+ * @param  list<ApiScope>  $scopes
+ */
+function v1Key(array $scopes = [ApiScope::SearchRead]): string
 {
-    // ..
+    return app(ApiKeys::class)->issue(LocalUser::get(), 'v1 test', $scopes)[1];
+}
+
+/**
+ * A v1 request with the key as a Bearer header, as a real client sends it.
+ */
+function v1(string $method, string $uri, ?string $key = null): TestResponse
+{
+    // The test client reuses one app; a real request starts with fresh guards.
+    app('auth')->forgetGuards();
+    $headers = $key === null ? [] : ['Authorization' => "Bearer {$key}"];
+
+    return test()->json($method, $uri, [], $headers);
 }

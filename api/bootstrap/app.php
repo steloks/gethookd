@@ -1,5 +1,7 @@
 <?php
 
+use App\Support\Errors\ApiError;
+use App\Support\Errors\ApiErrorRenderer;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -30,11 +32,19 @@ return Application::configure(basePath: dirname(__DIR__))
             fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
         );
 
+        // A thrown ApiError is a client error the response already explains, not something to log.
+        $exceptions->dontReport(ApiError::class);
+
         // v0 contract: every error, of any kind, is 400 {"error":"Invalid request"}.
         // Exceptions are still reported as usual; only the response is fixed.
         $exceptions->render(function (Throwable $e, Request $request) {
             if ($request->is('api/v0', 'api/v0/*')) {
                 return response()->json(['error' => 'Invalid request'], 400);
+            }
+
+            // Every other API path (v1, and unknown ones such as /api/v2) uses the one error shape.
+            if ($request->is('api/*')) {
+                return ApiErrorRenderer::toApiError($e, $request)->toResponse();
             }
         });
     })->create();

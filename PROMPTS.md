@@ -350,3 +350,29 @@ Log of the important prompts used during this assessment. Add an entry per task,
 **Issues and fixes:**
 - The new "nothing reported" test found a hidden bug: every unauthenticated API request without `Accept: application/json` tried to redirect to a `login` route that doesn't exist, so each bad key produced a reported `RouteNotFoundException` (v0 still answered 400). Fixed with `redirectGuestsTo(fn () => null)` in `bootstrap/app.php`; covered by the mutation run.
 - Not tested: the transaction around issuing (a failure between the two writes is hard to force). Rate limiting, key endpoints, v1 and MCP revocation are not built yet.
+
+## 10. v1 errors (Part 1, step 1)
+
+**Goal:** One error shape for every v1 status, from one registry, before any v1 search code.
+
+**Prompts:**
+
+> We can start with the v0 route. Analize the task and come with suggestion
+
+> Sorry i ment v1. start with the errors yes
+
+> why did you make get niches
+
+> remove it, its not required
+
+**Result:**
+- Plan agreed in five steps: errors → niches/ad detail → search and validation → cursor and impressions sort → OpenAPI. Still open: `started_after` inclusive or not, and the `niche` multi-value format (needed in step 3).
+- `app/Support/Errors/ErrorCode.php`: the registry (code → status, retryable, default message and next step). Codes so far: `unauthenticated` 401, `insufficient_scope` 403, `not_found` 404, `method_not_allowed` 405, `internal_error` 500. 422 and 429 codes come with the features that raise them.
+- `ApiError` (shape `{"error":{code,message,next_step,retryable,retry_after?}}`), and `ApiErrorRenderer`, which maps any exception on `api/*` (other than v0) to it. 401 says which case applies (no key / `api_key` in the URL / invalid or revoked key) and sends `WWW-Authenticate: Bearer`; 403 names the missing scope; 405 keeps the `Allow` header; anything else is `internal_error` with no exception details, and is still reported.
+- I first added `GET /api/v1/niches` as a real route to test auth errors against. Removed on request ("remove it, its not required"): the error tests now use a test-only route with the v1 middleware, to be switched to `/api/v1/ads` once it exists.
+- v1 test helpers `v1Key()` and `v1()` moved to `tests/Pest.php`.
+
+**Verification:**
+- `tests/Feature/V1/ErrorsTest.php`: the exact shape per status, each 401 case, revocation on the next call, the same key on v0 and v1, no leak on 500 with debug on or off, the 500 still reported, v0 untouched, no `Accept: application/json` needed.
+- Mutations: 17 run, 16 caught at first. Missed: changing 401 to 400 in the registry, because the tests read statuses from the registry itself. Added a test pinning each code's status literally; then caught (also 405 → 400).
+- Full suite 139 passed; Pint clean. After removing `/niches`: 138 passed, and 16 of 16 error mutations caught again.
