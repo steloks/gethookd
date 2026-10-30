@@ -2,38 +2,19 @@
 
 use App\Auth\ApiKeys;
 use App\Enums\ApiScope;
+use App\Models\Ad;
 use App\Models\PersonalAccessToken;
 use App\Support\Errors\ErrorCode;
 use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Route;
-use Illuminate\Testing\TestResponse;
 
-/**
- * The one error shape: exactly these fields, with the code's registry values.
- */
-function assertApiError(TestResponse $response, ErrorCode $code): void
-{
-    $response->assertStatus($code->status());
-    expect($response->json())->toHaveKey('error')->toHaveCount(1)
-        ->and(array_keys($response->json('error')))->toBe(['code', 'message', 'next_step', 'retryable'])
-        ->and($response->json('error.code'))->toBe($code->value)
-        ->and($response->json('error.retryable'))->toBe($code->retryable())
-        ->and($response->json('error.message'))->toBeString()->not->toBeEmpty()
-        ->and($response->json('error.next_step'))->toBeString()->not->toBeEmpty();
-}
-
-/*
- * No v1 endpoint exists yet, so these tests use a stand-in route with the same middleware v1 will use.
- * Switch them to /api/v1/ads once it exists.
- */
 beforeEach(function () {
-    Route::middleware(['api', 'auth:sanctum', 'abilities:'.ApiScope::SearchRead->value])
-        ->get('api/v1/__protected', fn () => ['ok' => true]);
+    $this->adPath = '/api/v1/ads/'.Ad::factory()->create()->id;
 });
 
 describe('401 unauthenticated', function () {
     it('says no key was sent', function () {
-        $response = v1('GET', '/api/v1/__protected');
+        $response = v1('GET', $this->adPath);
 
         assertApiError($response, ErrorCode::Unauthenticated);
         expect($response->json('error.message'))->toBe('No API key was sent.');
@@ -41,7 +22,7 @@ describe('401 unauthenticated', function () {
     });
 
     it('uses the error shape when the client does not ask for JSON', function () {
-        $response = $this->get('/api/v1/__protected', ['Accept' => '*/*']);
+        $response = $this->get($this->adPath, ['Accept' => '*/*']);
 
         assertApiError($response, ErrorCode::Unauthenticated);
     });
@@ -49,7 +30,7 @@ describe('401 unauthenticated', function () {
     it('says v1 ignores the v0 api_key parameter, without echoing the key', function () {
         $key = v1Key();
         app('auth')->forgetGuards();
-        $response = $this->getJson('/api/v1/__protected?api_key='.urlencode($key));
+        $response = $this->getJson($this->adPath.'?api_key='.urlencode($key));
 
         assertApiError($response, ErrorCode::Unauthenticated);
         expect($response->json('error.message'))->toContain('api_key')
@@ -58,7 +39,7 @@ describe('401 unauthenticated', function () {
     });
 
     it('says an unknown or malformed key is invalid, without echoing it', function (string $key) {
-        $response = v1('GET', '/api/v1/__protected', $key);
+        $response = v1('GET', $this->adPath, $key);
 
         assertApiError($response, ErrorCode::Unauthenticated);
         expect($response->json('error.message'))->toBe('The API key is invalid or has been revoked.')
@@ -70,24 +51,24 @@ describe('401 unauthenticated', function () {
 
     it('rejects a revoked key on the very next call', function () {
         $key = v1Key();
-        v1('GET', '/api/v1/__protected', $key)->assertOk();
+        v1('GET', $this->adPath, $key)->assertOk();
 
         app(ApiKeys::class)->revoke(PersonalAccessToken::query()->sole());
 
-        assertApiError(v1('GET', '/api/v1/__protected', $key), ErrorCode::Unauthenticated);
+        assertApiError(v1('GET', $this->adPath, $key), ErrorCode::Unauthenticated);
     });
 
     it('accepts the same key on v0 and v1', function () {
         $key = v1Key();
 
-        v1('GET', '/api/v1/__protected', $key)->assertOk();
+        v1('GET', $this->adPath, $key)->assertOk();
         app('auth')->forgetGuards();
         $this->get('/api/v0/ads?api_key='.urlencode($key))->assertOk();
     });
 });
 
 it('returns 403 insufficient_scope naming the missing scope', function () {
-    $response = v1('GET', '/api/v1/__protected', v1Key([ApiScope::KeysManage]));
+    $response = v1('GET', $this->adPath, v1Key([ApiScope::KeysManage]));
 
     assertApiError($response, ErrorCode::InsufficientScope);
     expect($response->json('error.message'))->toContain('search:read');
@@ -101,7 +82,7 @@ it('returns 404 not_found for an unknown path', function (string $path) {
 })->with(['/api/v1/nothing', '/api/v2/ads']);
 
 it('returns 405 method_not_allowed with an Allow header', function () {
-    $response = v1('POST', '/api/v1/__protected', v1Key());
+    $response = v1('POST', $this->adPath, v1Key());
 
     assertApiError($response, ErrorCode::MethodNotAllowed);
     expect($response->headers->get('Allow'))->toContain('GET');

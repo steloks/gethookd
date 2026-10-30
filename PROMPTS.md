@@ -351,28 +351,37 @@ Log of the important prompts used during this assessment. Add an entry per task,
 - The new "nothing reported" test found a hidden bug: every unauthenticated API request without `Accept: application/json` tried to redirect to a `login` route that doesn't exist, so each bad key produced a reported `RouteNotFoundException` (v0 still answered 400). Fixed with `redirectGuestsTo(fn () => null)` in `bootstrap/app.php`; covered by the mutation run.
 - Not tested: the transaction around issuing (a failure between the two writes is hard to force). Rate limiting, key endpoints, v1 and MCP revocation are not built yet.
 
-## 10. v1 errors (Part 1, step 1)
+## 10. v1 ad detail (Part 1, step 2)
 
-**Goal:** One error shape for every v1 status, from one registry, before any v1 search code.
+**Goal:** `GET /api/v1/ads/{id}`, the full record of one ad (needed later by the MCP `get_ad` tool).
+
+**Prompt:**
+
+> ok continue with the ads by id endpoint
+
+**Result:**
+- `app/Http/Resources/V1/AdResource.php`: the v1 ad, with the spec's data-model names in a fixed order: `id, brand_id, brand_name, headline, body_text, niche` (slug), `format, status, start_date, end_date, days_active` (the shared `Ad::daysActiveOn`), `impression_rank, countries, discovered_at` (UTC, `…Z`). Search (step 3) will reuse it.
+- `app/Http/Controllers/Api/V1/AdController::show`: `{"data": {...}}`. A missing id gives 404 `not_found` ("There is no ad with id N."); an id that cannot exist (not digits, or over 18 digits) gives 404 before any query, because a non-numeric or out-of-range value would otherwise be a database error.
+- Route behind Bearer auth and `search:read`. The error tests moved from their stand-in route to this real one.
+- `assertApiError()` moved to `tests/Pest.php` so each test file runs on its own.
+
+**Verification:**
+- `tests/Feature/V1/AdDetailTest.php`: the exact body of an active ad, an inactive ad (end date, days up to it), `days_active` equal to v0's for both, `discovered_at` in UTC with PHP set to New York, 404 for a missing id, 404 with nothing reported for `abc`, `-1`, `1.5`, a 20-digit id and `" 1"`.
+- Mutations: 11 of 11 caught (`scratchpad/mutations_v1_detail.py`); the 16 error mutations still caught.
+- Full suite 148 passed; Pint clean.
+
+## 11. v1 niches
+
+**Goal:** `GET /api/v1/niches`, the v1 source for the MCP `list_niches` tool.
 
 **Prompts:**
 
-> We can start with the v0 route. Analize the task and come with suggestion
+> Is this route required?
 
-> Sorry i ment v1. start with the errors yes
+(Answer: not a Part 1 MUST, but Part 2 builds `get_ad` and `list_niches` "on top of v1", so both need a v1 source. Kept `/ads/{id}`.)
 
-> why did you make get niches
+> OK. now make the get niches
 
-> remove it, its not required
+**Result:** `GET /api/v1/niches` returns `{"data":[{slug, name, keywords}]}` in catalog order, behind Bearer auth and `search:read`. It is the same code as the route removed in task 10.
 
-**Result:**
-- Plan agreed in five steps: errors → niches/ad detail → search and validation → cursor and impressions sort → OpenAPI. Still open: `started_after` inclusive or not, and the `niche` multi-value format (needed in step 3).
-- `app/Support/Errors/ErrorCode.php`: the registry (code → status, retryable, default message and next step). Codes so far: `unauthenticated` 401, `insufficient_scope` 403, `not_found` 404, `method_not_allowed` 405, `internal_error` 500. 422 and 429 codes come with the features that raise them.
-- `ApiError` (shape `{"error":{code,message,next_step,retryable,retry_after?}}`), and `ApiErrorRenderer`, which maps any exception on `api/*` (other than v0) to it. 401 says which case applies (no key / `api_key` in the URL / invalid or revoked key) and sends `WWW-Authenticate: Bearer`; 403 names the missing scope; 405 keeps the `Allow` header; anything else is `internal_error` with no exception details, and is still reported.
-- I first added `GET /api/v1/niches` as a real route to test auth errors against. Removed on request ("remove it, its not required"): the error tests now use a test-only route with the v1 middleware, to be switched to `/api/v1/ads` once it exists.
-- v1 test helpers `v1Key()` and `v1()` moved to `tests/Pest.php`.
-
-**Verification:**
-- `tests/Feature/V1/ErrorsTest.php`: the exact shape per status, each 401 case, revocation on the next call, the same key on v0 and v1, no leak on 500 with debug on or off, the 500 still reported, v0 untouched, no `Accept: application/json` needed.
-- Mutations: 17 run, 16 caught at first. Missed: changing 401 to 400 in the registry, because the tests read statuses from the registry itself. Added a test pinning each code's status literally; then caught (also 405 → 400).
-- Full suite 139 passed; Pint clean. After removing `/niches`: 138 passed, and 16 of 16 error mutations caught again.
+**Verification:** `tests/Feature/V1/NichesTest.php` (the exact list and one exact entry; 401 without a key, 403 without `search:read`). Mutations 4 of 4 caught. Full suite 150 passed; Pint clean.

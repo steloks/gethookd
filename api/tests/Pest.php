@@ -2,6 +2,7 @@
 
 use App\Auth\ApiKeys;
 use App\Enums\ApiScope;
+use App\Support\Errors\ErrorCode;
 use App\Support\LocalUser;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Testing\TestResponse;
@@ -66,4 +67,18 @@ function v1(string $method, string $uri, ?string $key = null): TestResponse
     $headers = $key === null ? [] : ['Authorization' => "Bearer {$key}"];
 
     return test()->json($method, $uri, [], $headers);
+}
+
+/**
+ * The one error shape: exactly these fields, with the code's registry values.
+ */
+function assertApiError(TestResponse $response, ErrorCode $code): void
+{
+    $response->assertStatus($code->status());
+    expect($response->json())->toHaveKey('error')->toHaveCount(1)
+        ->and(array_keys($response->json('error')))->toBe(['code', 'message', 'next_step', 'retryable'])
+        ->and($response->json('error.code'))->toBe($code->value)
+        ->and($response->json('error.retryable'))->toBe($code->retryable())
+        ->and($response->json('error.message'))->toBeString()->not->toBeEmpty()
+        ->and($response->json('error.next_step'))->toBeString()->not->toBeEmpty();
 }
