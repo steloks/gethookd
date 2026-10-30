@@ -29,10 +29,13 @@ class RejectQueryParameters
         $path = SafeText::path($request);
         $shown = array_map(fn (string $name) => SafeText::of($name), $names);
         $count = count($names);
+        $more = $count - ApiError::MAX_DETAILS;
 
         throw new ApiError(
             ErrorCode::InvalidParameters,
-            ($count === 1 ? '1 problem' : "{$count} problems").' with the parameters: '.implode(', ', $shown).". {$path} takes no query parameters.",
+            ($count === 1 ? '1 problem' : "{$count} problems").' with the parameters: '
+                .implode(', ', array_slice($shown, 0, ApiError::MAX_DETAILS)).($more > 0 ? " and {$more} more" : '')
+                .". {$path} takes no query parameters.",
             "Send instead: {$request->method()} {$path}",
             details: array_map(fn (string $name) => [
                 'param' => $name,

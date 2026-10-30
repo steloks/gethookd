@@ -11,6 +11,7 @@ enum ErrorCode: string
     case BadRequest = 'bad_request';
     case Unauthenticated = 'unauthenticated';
     case InsufficientScope = 'insufficient_scope';
+    case Forbidden = 'forbidden';
     case NotFound = 'not_found';
     case MethodNotAllowed = 'method_not_allowed';
     case InvalidParameters = 'invalid_parameters';
@@ -24,6 +25,7 @@ enum ErrorCode: string
             self::BadRequest => 400,
             self::Unauthenticated => 401,
             self::InsufficientScope => 403,
+            self::Forbidden => 403,
             self::NotFound => 404,
             self::MethodNotAllowed => 405,
             self::InvalidParameters => 422,
@@ -50,6 +52,7 @@ enum ErrorCode: string
             self::BadRequest => 'The request could not be processed as sent.',
             self::Unauthenticated => 'The API key is missing, invalid or revoked.',
             self::InsufficientScope => 'This API key does not have the scope this endpoint needs.',
+            self::Forbidden => 'This API key is not allowed to do this.',
             self::NotFound => 'There is no such resource.',
             self::MethodNotAllowed => 'This endpoint does not support that HTTP method.',
             self::InvalidParameters => 'Some request parameters are unknown or invalid.',
@@ -65,6 +68,7 @@ enum ErrorCode: string
             self::BadRequest => 'Check the request against the v1 OpenAPI spec and send a corrected one. Retrying it unchanged will not help.',
             self::Unauthenticated => 'Send a valid key as "Authorization: Bearer <key>". Create one on the developer page if needed.',
             self::InsufficientScope => 'Use a key that has the required scope, or create one with it on the developer page.',
+            self::Forbidden => 'Do not retry this request with this key; it will be refused again.',
             self::NotFound => 'Check the path and id. Endpoints are listed in the v1 OpenAPI spec.',
             self::MethodNotAllowed => 'Use one of the methods in the Allow header.',
             self::InvalidParameters => 'Fix each parameter listed in details (allowed values and likely corrections are given there), then send the request again.',

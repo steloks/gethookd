@@ -13,9 +13,12 @@ use RuntimeException;
  */
 final class ApiError extends RuntimeException
 {
+    /** At most this many details are sent, so a request with thousands of bad parameters can't get a huge response. */
+    public const MAX_DETAILS = 10;
+
     /**
      * @param  array<string, string>  $headers
-     * @param  list<array<string, mixed>>  $details  one entry per problem, e.g. per invalid parameter
+     * @param  list<array<string, mixed>>  $details  one entry per problem, e.g. per invalid parameter; only the first MAX_DETAILS are sent, so the message should say how many there are
      */
     public function __construct(
         public readonly ErrorCode $errorCode,
@@ -38,7 +41,7 @@ final class ApiError extends RuntimeException
         ];
 
         if ($this->details !== []) {
-            $error['details'] = $this->details;
+            $error['details'] = array_slice($this->details, 0, self::MAX_DETAILS);
         }
 
         if ($this->retryAfter !== null) {

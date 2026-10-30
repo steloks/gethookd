@@ -25,7 +25,8 @@ final class ApiErrorRenderer
     {
         return match (true) {
             $e instanceof ApiError => $e,
-            $e instanceof AuthenticationException => self::unauthenticated($request),
+            $e instanceof AuthenticationException,
+            $e instanceof HttpExceptionInterface && $e->getStatusCode() === 401 => self::unauthenticated($request),
             $e instanceof AccessDeniedHttpException && $e->getPrevious() instanceof MissingAbilityException => new ApiError(
                 ErrorCode::InsufficientScope,
                 'This API key is missing the scope: '.implode(', ', $e->getPrevious()->abilities()).'.',
@@ -63,6 +64,7 @@ final class ApiErrorRenderer
         return match (true) {
             $status === 429 => new ApiError(ErrorCode::RateLimited, retryAfter: $retryAfter, headers: $headers),
             $status === 503 => new ApiError(ErrorCode::Unavailable, retryAfter: $retryAfter, headers: $headers),
+            $status === 403 => new ApiError(ErrorCode::Forbidden),
             $status >= 400 && $status < 500 => new ApiError(ErrorCode::BadRequest),
             default => new ApiError(ErrorCode::InternalError),
         };

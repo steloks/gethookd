@@ -5,6 +5,7 @@ use App\Enums\ApiScope;
 use App\Models\Ad;
 use App\Models\PersonalAccessToken;
 use App\Support\Errors\ErrorCode;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Route;
 
@@ -49,13 +50,26 @@ describe('401 unauthenticated', function () {
         'malformed' => ['abc|x'],
     ]);
 
-    it('rejects a revoked key on the very next call', function () {
+    it('rejects a revoked key on the very next call', function (string $path) {
+        $path = $path === 'ad' ? $this->adPath : $path;
         $key = v1Key();
-        v1('GET', $this->adPath, $key)->assertOk();
+        v1('GET', $path, $key)->assertOk();
 
         app(ApiKeys::class)->revoke(PersonalAccessToken::query()->sole());
 
-        assertApiError(v1('GET', $this->adPath, $key), ErrorCode::Unauthenticated);
+        assertApiError(v1('GET', $path, $key), ErrorCode::Unauthenticated);
+    })->with(['ad', '/api/v1/ads', '/api/v1/niches']);
+
+    it('uses the error shape and leaks nothing when looking up the key fails', function () {
+        $key = v1Key();
+        Exceptions::fake();
+        PersonalAccessToken::retrieved(fn () => throw new RuntimeException('SQLSTATE[08006] connection to secret-db failed'));
+
+        $response = v1('GET', $this->adPath, $key);
+
+        assertApiError($response, ErrorCode::InternalError);
+        expect($response->getContent())->not->toContain('SQLSTATE')->not->toContain('secret-db')->not->toContain(substr($key, 4, 12));
+        Exceptions::assertReported(RuntimeException::class);
     });
 
     it('accepts the same key on v0 and v1', function () {
@@ -81,14 +95,18 @@ it('returns 404 not_found for an unknown path', function (string $path) {
     expect($response->json('error.message'))->toBe("There is no GET {$path}.");
 })->with(['/api/v1/nothing', '/api/v2/ads']);
 
-it('never echoes a long path in full or a key pasted into the path', function () {
-    $key = 'ghk_'.str_repeat('k', 48);
+it('never echoes a long path in full or a key pasted into the path', function (string $key) {
     $response = v1('GET', '/api/v1/'.$key.'/'.str_repeat('x', 3000), v1Key());
 
     assertApiError($response, ErrorCode::NotFound);
     expect(mb_strlen($response->json('error.message')))->toBeLessThan(130)
-        ->and($response->getContent())->not->toContain($key)->toContain('ghk_[redacted]');
-});
+        ->and(strtolower(rawurldecode($response->getContent())))->not->toContain('kkkkkkkk')->toContain('ghk_[redacted]');
+})->with([
+    'as is' => ['ghk_'.str_repeat('k', 48)],
+    'upper case' => ['GHK_'.str_repeat('K', 48)],
+    'underscore encoded' => ['ghk%5F'.str_repeat('k', 48)],
+    'letters encoded' => ['ghk_'.str_repeat('%6B', 48)],
+]);
 
 it('returns 405 method_not_allowed with an Allow header', function () {
     $response = v1('POST', $this->adPath, v1Key());
@@ -157,6 +175,22 @@ describe('other HTTP errors keep their meaning', function () {
         $response->assertHeader('Retry-After');
     });
 
+    it('keeps 401 an authentication error, saying what to send', function () {
+        $response = v1('GET', '/api/v1/__abort/401');
+
+        assertApiError($response, ErrorCode::Unauthenticated);
+        $response->assertHeader('WWW-Authenticate', 'Bearer');
+    });
+
+    it('keeps 403 a refusal, whether from abort or a denied authorization', function (string $path) {
+        Route::middleware('api')->get('api/v1/__deny', fn () => throw new AuthorizationException('policy text not meant for callers'));
+
+        $response = v1('GET', $path);
+
+        assertApiError($response, ErrorCode::Forbidden);
+        expect($response->getContent())->not->toContain('policy text')->not->toContain('framework text');
+    })->with(['/api/v1/__abort/403', '/api/v1/__deny']);
+
     it('maps 503 to a retryable unavailable', function () {
         assertApiError(v1('GET', '/api/v1/__abort/503'), ErrorCode::Unavailable);
     });
@@ -192,6 +226,7 @@ describe('error code registry', function () {
             'bad_request' => 400,
             'unauthenticated' => 401,
             'insufficient_scope' => 403,
+            'forbidden' => 403,
             'not_found' => 404,
             'method_not_allowed' => 405,
             'invalid_parameters' => 422,

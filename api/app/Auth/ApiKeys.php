@@ -49,11 +49,13 @@ final class ApiKeys
     }
 
     /**
-     * Keeps the row so the key can still be listed; it stops authenticating at once.
+     * Keeps the row so the key can still be listed; it stops authenticating at once. Revoking
+     * again keeps the first revocation time.
      */
     public function revoke(PersonalAccessToken $key): void
     {
-        $key->forceFill(['revoked_at' => now()])->save();
+        PersonalAccessToken::query()->whereKey($key->getKey())->whereNull('revoked_at')->update(['revoked_at' => now()]);
+        $key->refresh();
     }
 
     /**

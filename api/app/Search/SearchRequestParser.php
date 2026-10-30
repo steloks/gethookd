@@ -172,10 +172,11 @@ final class SearchRequestParser
 
             $newSearch = $this->corrected;
             unset($newSearch['cursor']);
+            $restart = self::request($newSearch);
 
             throw $this->error(
-                'To continue the earlier search: GET /api/v1/ads?cursor='.rawurlencode($this->corrected['cursor'])
-                .'. To run the new search from its first page: GET /api/v1/ads'.self::queryOf($newSearch),
+                'To continue the earlier search: GET /api/v1/ads?cursor='.rawurlencode($this->corrected['cursor']).'.'
+                .($restart === null ? ' To run the new search, leave cursor out.' : " To run the new search from its first page: {$restart}"),
             );
         }
     }
@@ -218,12 +219,12 @@ final class SearchRequestParser
             if (count($raws) > 1 && $param === 'niche') {
                 $grouped[$param] = implode(',', $raws);
                 if (($literalCounts['niche'] ?? 0) > 1) {
-                    // Only suggest text that is valid; an encoding problem is reported on its own below.
+                    // Only suggest real slugs; an encoding problem or an unknown niche is reported on its own below.
                     $this->problem(
                         'niche',
                         ParameterIssue::RepeatedParameter,
                         'niche was sent more than once. Send one niche parameter with the slugs separated by commas.',
-                        didYouMean: self::isText($grouped[$param]) ? implode(',', array_unique(self::listItems($grouped[$param]))) : null
+                        didYouMean: self::isText($grouped[$param]) ? $this->nicheFix(self::listItems($grouped[$param])) : null
                     );
                 }
             } elseif (count($raws) > 1) {
@@ -266,27 +267,18 @@ final class SearchRequestParser
         }
 
         $slugs = NicheCatalog::slugs();
-        $unknown = [];
-        $fixed = [];
-        foreach ($items as $item) {
-            $slug = in_array($item, $slugs, true) ? $item : null;
-            if ($slug === null) {
-                $unknown[] = $this->show($item);
-                $slug = $this->suggestNiche($item);
-            }
-            $fixed[] = $slug;
-        }
+        $unknown = array_map(fn (string $item) => $this->show($item), array_values(array_diff($items, $slugs)));
 
         if ($unknown !== []) {
-            $allFixed = ! in_array(null, $fixed, true);
+            $fix = $this->nicheFix($items);
             $this->problem(
                 'niche',
                 ParameterIssue::InvalidValue,
                 'Unknown niche '.self::firstFew($unknown).'. niche takes slugs such as "pet-supplies", separated by commas; GET /api/v1/niches lists them.',
                 $slugs,
-                $allFixed ? implode(',', array_unique($fixed)) : null
+                $fix
             );
-            $this->fixable = $this->fixable && $allFixed;
+            $this->fixable = $this->fixable && $fix !== null;
 
             return null;
         }
@@ -294,6 +286,18 @@ final class SearchRequestParser
         $this->corrected['niche'] = implode(',', array_unique($items));
 
         return array_values(array_intersect($slugs, $items));
+    }
+
+    /**
+     * The items as slugs ("skincare,pet-supplies"), or null if one has no likely slug.
+     *
+     * @param  list<string>  $items
+     */
+    private function nicheFix(array $items): ?string
+    {
+        $fixed = array_map(fn (string $item) => in_array($item, NicheCatalog::slugs(), true) ? $item : $this->suggestNiche($item), $items);
+
+        return in_array(null, $fixed, true) ? null : implode(',', array_unique($fixed));
     }
 
     private function suggestNiche(string $item): ?string
@@ -444,15 +448,30 @@ final class SearchRequestParser
 
     private function error(?string $nextStep = null): ApiError
     {
-        $names = implode(', ', array_unique(array_column($this->problems, 'param')));
+        $names = self::firstFew(array_values(array_unique(array_column($this->problems, 'param'))));
         $count = count($this->problems);
+        $request = $this->fixable ? self::request($this->corrected) : null;
 
         return new ApiError(
             ErrorCode::InvalidParameters,
-            ($count === 1 ? '1 problem' : "{$count} problems")." with the search parameters: {$names}. See details.",
-            $nextStep ?? ($this->fixable ? 'Send instead: GET /api/v1/ads'.self::queryOf($this->corrected) : null),
+            ($count === 1 ? '1 problem' : "{$count} problems")." with the search parameters: {$names}. See details"
+                .($count > ApiError::MAX_DETAILS ? ' (the first '.ApiError::MAX_DETAILS.').' : '.'),
+            $nextStep ?? ($request === null ? null : "Send instead: {$request}"),
             details: $this->problems,
         );
+    }
+
+    /**
+     * The search request with these parameters, or null if it would repeat an API key the caller
+     * put in a value: a request can't be shown with the key redacted, so none is shown.
+     *
+     * @param  array<string, string>  $params
+     */
+    private static function request(array $params): ?string
+    {
+        $query = self::queryOf($params);
+
+        return SafeText::containsKey(rawurldecode($query)) ? null : 'GET /api/v1/ads'.$query;
     }
 
     /**

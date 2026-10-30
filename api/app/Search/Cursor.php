@@ -3,6 +3,7 @@
 namespace App\Search;
 
 use JsonException;
+use LogicException;
 
 /**
  * Where a search walk is: the search itself (sort, normalised filters, limit), the snapshot (the
@@ -143,7 +144,21 @@ final readonly class Cursor
 
     private static function signature(string $body): string
     {
-        return self::base64UrlEncode(substr(hash_hmac('sha256', 'search-cursor:'.$body, (string) config('app.key'), true), 0, 16));
+        return self::base64UrlEncode(substr(hash_hmac('sha256', $body, self::signingKey(), true), 0, 16));
+    }
+
+    /**
+     * A key used only for cursors, derived from APP_KEY. Without APP_KEY anyone could sign a
+     * cursor, so the API fails (500) instead of issuing or accepting unsigned ones.
+     */
+    private static function signingKey(): string
+    {
+        $appKey = (string) config('app.key');
+        if (strlen($appKey) < 32) {
+            throw new LogicException('APP_KEY is missing or too short to sign search cursors. Run php artisan key:generate.');
+        }
+
+        return hash_hmac('sha256', 'search-cursor', $appKey, true);
     }
 
     private static function base64UrlEncode(string $bytes): string

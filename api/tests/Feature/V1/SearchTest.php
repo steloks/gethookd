@@ -375,6 +375,11 @@ describe('validation', function () {
             ->and($response->json('error.next_step'))->toBe('Send instead: GET /api/v1/ads?niche=skincare,haircare');
     });
 
+    it('suggests only real slugs for a repeated niche', function () {
+        expect(search('niche=Skincare&niche=haircare')->json('error.details.0'))->toMatchArray(['issue' => 'repeated_parameter', 'did_you_mean' => 'skincare,haircare'])
+            ->and(search('niche=nope&niche=haircare')->json('error.details.0'))->toMatchArray(['issue' => 'repeated_parameter'])->not->toHaveKey('did_you_mean');
+    });
+
     it('suggests each slug once when a repeated niche repeats a slug', function () {
         $response = search('niche=skincare&niche=skincare');
 
@@ -438,11 +443,32 @@ describe('validation', function () {
     it('never echoes an API key sent as a value or a name', function (string $query) {
         $key = 'ghk_'.str_repeat('k', 48);
 
+        // UPPER: the key in capitals; ENCODED: its underscore still percent-encoded after decoding.
+        $response = search(str_replace(['UPPER', 'ENCODED', 'KEY'], [strtoupper($key), str_replace('_', '%255F', $key), $key], $query));
+
+        assertApiError($response, ErrorCode::InvalidParameters, withDetails: true);
+        expect(strtolower($response->getContent()))->not->toContain('kkkkkkkk')->toContain('ghk_[redacted]');
+    })->with(['format=KEY', 'KEY=1', 'niche=KEY', 'niche=KEY&niche=skincare', 'format=UPPER', 'niche=ENCODED']);
+
+    it('never repeats an API key in the corrected request', function (string $query) {
+        $key = 'ghk_'.str_repeat('k', 48);
+
         $response = search(str_replace('KEY', $key, $query));
 
         assertApiError($response, ErrorCode::InvalidParameters, withDetails: true);
-        expect($response->getContent())->not->toContain(substr($key, 0, 20))->toContain('ghk_[redacted]');
-    })->with(['format=KEY', 'KEY=1', 'niche=KEY']);
+        expect($response->getContent())->not->toContain(substr($key, 0, 20))
+            ->and($response->json('error.next_step'))->toBe(ErrorCode::InvalidParameters->nextStep());
+    })->with(['query=KEY', 'q=KEY&order=newest', 'q=KEY&niche=Skincare']);
+
+    it('lists at most 10 problems, however many parameters are sent', function () {
+        $response = search(implode('&', array_map(fn (int $i) => "a{$i}=1", range(1, 500))));
+
+        assertApiError($response, ErrorCode::InvalidParameters, withDetails: true);
+        expect($response->json('error.details'))->toHaveCount(10)
+            ->and($response->json('error.details.9.param'))->toBe('a10')
+            ->and($response->json('error.message'))->toBe('500 problems with the search parameters: a1, a2, a3, a4, a5 and 495 more. See details (the first 10).')
+            ->and(strlen($response->getContent()))->toBeLessThan(8000);
+    });
 
     it('never echoes a long input in full', function () {
         $problem = soleProblem(search('format='.str_repeat('x', 500)));

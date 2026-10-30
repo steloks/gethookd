@@ -9,6 +9,7 @@ use App\Search\Cursor;
 use App\Search\SearchParams;
 use App\Search\SearchRequestParser;
 use App\Search\SearchSort;
+use App\Support\Errors\ApiError;
 use App\Support\Errors\ErrorCode;
 use App\Support\Errors\ParameterIssue;
 use App\Support\NicheCatalog;
@@ -122,9 +123,10 @@ it('documents exactly the filters the API echoes in applied_filters', function (
         ->toBe(array_keys($params->appliedFilters()));
 });
 
-it('documents every parameter issue the API reports', function () {
+it('documents every parameter issue the API reports, and how many', function () {
     expect(spec('components/schemas/ParameterProblem/properties/issue')['enum'])
-        ->toBe(array_map(fn (ParameterIssue $issue) => $issue->value, ParameterIssue::cases()));
+        ->toBe(array_map(fn (ParameterIssue $issue) => $issue->value, ParameterIssue::cases()))
+        ->and(spec('components/schemas/Error/properties/error/properties/details')['maxItems'])->toBe(ApiError::MAX_DETAILS);
 });
 
 it('pins each documented error response to the code for its status', function () {

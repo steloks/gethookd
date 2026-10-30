@@ -34,3 +34,12 @@ it('rejects query parameters instead of ignoring them', function () {
         ])
         ->and($response->json('error.next_step'))->toBe('Send instead: GET /api/v1/niches');
 });
+
+it('lists at most 10 rejected parameters, however many are sent', function () {
+    $response = v1('GET', '/api/v1/niches?'.implode('&', array_map(fn (int $i) => "a{$i}=1", range(1, 500))), v1Key());
+
+    assertApiError($response, ErrorCode::InvalidParameters, withDetails: true);
+    expect($response->json('error.details'))->toHaveCount(10)
+        ->and($response->json('error.message'))->toBe('500 problems with the parameters: a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 and 490 more. /api/v1/niches takes no query parameters.')
+        ->and(strlen($response->getContent()))->toBeLessThan(8000);
+});

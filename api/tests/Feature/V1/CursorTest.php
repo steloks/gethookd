@@ -308,6 +308,27 @@ describe('invalid cursors', function () {
         expect(array_column($response->json('error.details'), 'param'))->toBe(['niche']);
     });
 
+    it('are neither issued nor accepted without an APP_KEY to sign them', function (string $appKey) {
+        $cursor = pageOf('limit=2')->json('next_cursor');
+        Exceptions::fake();
+        config(['app.key' => $appKey]);
+
+        expect(fn () => Cursor::seal(['v' => 1, 's' => 'newest', 'f' => [], 'l' => 2, 'x' => 9, 'k' => ['2026-01-01', 1]]))->toThrow(LogicException::class);
+        assertApiError(pageOf('limit=2'), ErrorCode::InternalError);
+        assertApiError(pageOf('cursor='.rawurlencode($cursor)), ErrorCode::InternalError);
+        Exceptions::assertReported(LogicException::class);
+    })->with(['missing' => [''], 'too short' => ['base64:c2hvcnQ=']]);
+
+    it('does not repeat an API key in the hint for a new search', function () {
+        $key = 'ghk_'.str_repeat('k', 48);
+
+        $response = pageOf('cursor='.rawurlencode(pageOf('limit=2')->json('next_cursor')).'&q='.$key);
+
+        expect($response->json('error.details.0.issue'))->toBe('cursor_mismatch')
+            ->and($response->json('error.next_step'))->toEndWith('. To run the new search, leave cursor out.')
+            ->and($response->getContent())->not->toContain('kkkkkkkk');
+    });
+
     it('rejects an empty or repeated cursor', function (string $query, string $issue) {
         expect(pageOf($query)->json('error.details.0.issue'))->toBe($issue);
     })->with([

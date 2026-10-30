@@ -556,3 +556,23 @@ Log of the important prompts used during this assessment. Add an entry per task,
 
 **Verification:**
 - Mutations: 18 run, 18 caught (helper checks removed, header optional, details optional or empty, codes unpinned or wrong, applied niche enum dropped, `q` maxLength restored, slug missing from description, issue undocumented, `retry_after` minimum 0; in the code: `q` counted before trimming, new issue, `applied_filters` key renamed, 404 status changed).
+
+## 19. Fixes from the security audit
+
+**Prompt:** "@security-auditor investigate please", then "yes go on, fix it" (agreed set: the Medium and the four Lows, plus the one-line revoke guard; the other Info items are left).
+
+**What changed:**
+- `docker-compose.yml`: Postgres and Redis ports are published on `127.0.0.1` only. Before, they listened on all interfaces, and the auditor connected over the LAN (Postgres superuser with a committed password, Redis without a password). Containers were recreated; `lsof` and `nc` against the LAN IP confirm. `tests/Unit/DockerComposeTest.php` checks every published port.
+- Key redaction:
+  - `SafeText` matches keys in any case and with `%5F` for the underscore, and `path()` uses the decoded path.
+  - The repeated-`niche` suggestion is built from real slugs only (it used to echo the raw values, keys included).
+  - No "Send instead" request is given when it would contain a key (e.g. `query=<key>`), and the cursor-mismatch hint drops the new-search URL in that case.
+- 422 size: `ApiError` sends at most `MAX_DETAILS` (10) details; the parser and `RejectQueryParameters` cap the names in the message too. The spec says `maxItems: 10` (parity test).
+- `Cursor` signs with a key derived from `APP_KEY` and throws (500, reported) if `APP_KEY` is missing or shorter than 32 characters, instead of signing with an empty key.
+- `ApiErrorRenderer`: any 401 becomes `unauthenticated` (with `WWW-Authenticate`), any 403 becomes the new `forbidden` code (403). Both used to become 400 `bad_request`.
+- `ApiKeys::revoke` keeps the first revocation time.
+- New tests: the echo cases above, size caps on search and `/niches`, `APP_KEY` missing or short, 401/403/AuthorizationException mapping, a 500 while looking up the key leaks nothing, revocation on the next call for all three v1 endpoints, revoking twice.
+
+**Verification:**
+- Mutations: 18 run, 18 caught. The first run missed one (raw path instead of decoded path), because the `%5F` pattern already covered the encoded-underscore case; a key with percent-encoded letters was added to the test and the mutant is now caught.
+- Full suite passed; Pint clean.

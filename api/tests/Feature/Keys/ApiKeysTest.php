@@ -90,6 +90,17 @@ describe('revoke', function () {
             ->and($stored->isRevoked())->toBeTrue()
             ->and($stored->revoked_at->toIso8601String())->toBe('2026-10-05T12:00:00+00:00');
     });
+
+    it('keeps the first revocation time when revoked again', function () {
+        $this->travelTo('2026-10-05 12:00:00');
+        [$key] = issueKey();
+        app(ApiKeys::class)->revoke($key);
+
+        $this->travelTo('2026-10-07 09:00:00');
+        app(ApiKeys::class)->revoke(PersonalAccessToken::query()->sole());
+
+        expect(PersonalAccessToken::query()->sole()->revoked_at->toIso8601String())->toBe('2026-10-05T12:00:00+00:00');
+    });
 });
 
 describe('authentication', function () {

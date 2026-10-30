@@ -38,7 +38,8 @@ Where the spec is ambiguous, this is what the code does and why.
 
 - Every search response has `next_cursor`: send it back as `?cursor=` for the next page. It is `null` on the last page.
 - The cursor carries the search (filters, sort, limit), so `?cursor=…` alone is enough. Sending it with the same filters also works. Sending it with a different filter or sort is a 422 `cursor_mismatch`, because the position would mean nothing in another search. `limit` may change from page to page.
-- Cursors are opaque and signed with `APP_KEY`. A cursor that was changed, or issued under another key, is a 422. Rotating `APP_KEY` invalidates walks in progress. Cursors do not expire.
+- Cursors are opaque and signed with a key derived from `APP_KEY`. A cursor that was changed, or issued under another key, is a 422. Rotating `APP_KEY` invalidates walks in progress. Cursors do not expire.
+- Without an `APP_KEY` (at least 32 characters) the API neither issues nor accepts cursors, so searches fail with a 500 `internal_error` instead of handing out cursors anyone could forge. `make up` must run `php artisan key:generate`.
 
 **Guarantees while ads are being ingested and deactivated during a walk** (proved by `tests/Feature/V1/CursorTest.php`, which runs the real ingest cycle between pages):
 
@@ -52,6 +53,8 @@ Where the spec is ambiguous, this is what the code does and why.
 ### Errors
 
 - Every non-v0 error uses one shape: `{"error": {"code", "message", "next_step", "retryable", "details"?, "retry_after"?}}`. The codes are listed in `api/app/Support/Errors/ErrorCode.php`.
-- HTTP errors raised outside our code keep their meaning: client errors become a non-retryable `bad_request` (400), 429 becomes `rate_limited` with `retry_after`, and 503 becomes a retryable `unavailable`. Anything else is `internal_error`, which never includes the underlying message.
-- Error messages never echo more than a short, cleaned part of the caller's input, and anything that looks like an API key is replaced with `ghk_[redacted]`.
+- HTTP errors raised outside our code keep their meaning: 401 becomes `unauthenticated`, 403 (e.g. a denied authorization) becomes `forbidden`, other client errors become a non-retryable `bad_request` (400), 429 becomes `rate_limited` with `retry_after`, and 503 becomes a retryable `unavailable`. Anything else is `internal_error`, which never includes the underlying message.
+- Error messages never echo more than a short, cleaned part of the caller's input. Anything that looks like an API key (`ghk_…` in any case, also with its underscore percent-encoded, and in the decoded path) is replaced with `ghk_[redacted]`. When a corrected request would contain a key the caller put in a value, no corrected request is given.
+- A 422 lists at most 10 problems in `details`; the message says how many there are. So a request with thousands of bad parameters can't produce a huge response.
+- A successful search echoes `q` in `applied_filters` as sent, even if it looks like a key: it is the caller's own search term, returned only to them.
 - A CORS preflight (`OPTIONS`) is answered without a key and is not a search. It must not count as a billable call.

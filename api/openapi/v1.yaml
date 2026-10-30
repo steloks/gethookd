@@ -338,7 +338,7 @@ components:
           properties:
             code:
               type: string
-              enum: [bad_request, unauthenticated, insufficient_scope, not_found, method_not_allowed, invalid_parameters, rate_limited, internal_error, unavailable]
+              enum: [bad_request, unauthenticated, insufficient_scope, forbidden, not_found, method_not_allowed, invalid_parameters, rate_limited, internal_error, unavailable]
             message:
               type: string
               description: What went wrong, for a person or a model.
@@ -354,7 +354,8 @@ components:
               description: Seconds to wait before retrying (also in the Retry-After header).
             details:
               type: array
-              description: One entry per problem with the request's parameters.
+              maxItems: 10
+              description: One entry per problem with the request's parameters, at most 10; the message says how many there are.
               items:
                 $ref: '#/components/schemas/ParameterProblem'
 
