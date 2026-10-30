@@ -19,6 +19,7 @@ SHOULD: Bearer auth on v1 (same key as v0 query param), 1,000/month quota with a
 ## Stack
 
 - Laravel 13 / PHP 8.4 — v0/v1 REST API, keys, metering, ingest command
+- Laravel Sanctum 4 — API keys (personal access tokens; abilities = scopes), owned by one hard-coded local user
 - React + Vite — developer page
 - Node.js 22 + TypeScript + `@modelcontextprotocol/sdk` — MCP server (Streamable HTTP), a separate service that calls v1 over HTTP
 - PostgreSQL 16 — primary DB (row locks and unique constraints for exact metering); tests use the separate `gethookd_test` database, never SQLite
@@ -91,8 +92,9 @@ Every target must work from a fresh `git clone`. If you add a step, add it to th
 
 ## Security and secrets
 
-- API keys: generate with a CSPRNG, store only a hash (SHA-256 of a high-entropy key is fine), return the plaintext exactly once at creation. Store and display only the prefix afterwards.
-- Compare key hashes in constant time. Check revocation and scopes on every request — no caching that delays revocation.
+- API keys are Sanctum personal access tokens, issued only through `App\Auth\ApiKeys`: format `ghk_` + 40 random chars + CRC32, handed out without Sanctum's `<id>|` part, only the SHA-256 stored, plaintext returned exactly once. The visible `prefix` column is what lists and logs may show.
+- Revocation sets `revoked_at` (never delete keys). `AppServiceProvider` rejects revoked tokens on every request via `Sanctum::authenticateAccessTokensUsing`; no caching that delays revocation. Scopes are checked with Sanctum's `abilities:` middleware.
+- Key transport: v0 reads only `?api_key=`; every other route reads only `Authorization: Bearer` (keys stay out of URLs). `config/sanctum.php` `guard` is `[]`, so API requests never authenticate from a session cookie.
 - Never log full keys, `Authorization` headers, or `api_key` query values. Redact them in logs, error messages, and exceptions.
 - 500 responses use the standard error shape and never leak stack traces, SQL, or secrets.
 - No real secrets in the repo. Commit `.env.example` only; `.env` stays gitignored. Local dev credentials must be obviously fake.

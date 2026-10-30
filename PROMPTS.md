@@ -287,3 +287,66 @@ Log of the important prompts used during this assessment. Add an entry per task,
 - With no transaction, the atomicity test fails because the outer test transaction is aborted (SQLSTATE 25P02), not at its count assertion. That is still a correct failure; a comment in the test explains it.
 - The negative `--interval` case hung without validation (it fell through to "run until stopped"). It now passes `--ticks=1`, so a missing check fails instead of hanging.
 - Limitation: the pgsql timezone test catches a missing config entry, but its `SHOW timezone` check cannot fail on our server because the server default is already UTC.
+
+## 8. Part 0.4: v0 endpoint on Sanctum, and contract test
+
+**Goal:** Implement `GET /api/v0/ads` exactly as the spec's contract says, quirks included, with a contract test that pins it.
+
+**Prompt(s):**
+> mplement the v0 ads API endpoint according to the exact contract - match the requierd params and response struct.
+
+> What auth should we use for the api? I am thinking for Laravel Sanctum or Passport
+
+> No. We will use Sanctum or Passport
+
+(Then chose "Sanctum (Recommended)" when asked.)
+
+**Result:**
+- First pass used a small custom `api_keys` table. I recommended keeping it, but the decision was Sanctum or Passport; I recommended Sanctum over Passport (Passport is a full OAuth2 server; we have no login flow). The uncommitted custom-key work was discarded.
+- Sanctum 4.3:
+  - Keys are personal access tokens owned by `App\Support\LocalUser`, issued via `App\Auth\ApiKeys`: format `ghk_` + 40 chars + CRC32, handed out without `<id>|`, SHA-256 stored.
+  - Added `prefix` and `revoked_at` columns.
+  - `AppServiceProvider` reads `?api_key=` on v0 only (Bearer elsewhere) and rejects revoked tokens.
+  - `guard => []` (no session auth on the API).
+  - `php artisan keys:create {name} [--scope=…]` prints a key once.
+- `app/Http/Controllers/Api/V0/AdController.php`: the full contract. `q` is ILIKE on headline/body with `%`/`_` escaped; niche matches slug or name case-insensitively; format and status are exact matches; invalid values and unknown params are ignored; page/per_page fall back to the defaults when invalid; per_page is clamped to 100; sorted by `start_date` desc with no tiebreaker; response is `{data, page, total}`.
+- `bootstrap/app.php`: every exception on `api/v0/*` renders `400 {"error":"Invalid request"}`, and is still reported.
+- Assumption to record in the README: invalid `page`/`per_page` values are ignored (defaults apply) rather than rejected, consistent with v0 ignoring invalid filter values.
+
+**Verification:**
+- Manual curl against `php artisan serve`: a valid key gives 200; a bad, missing, wrong-scope, or revoked key, a Bearer header instead of `api_key`, POST, and an array `api_key` all give `400 {"error":"Invalid request"}`. Smoke keys deleted afterwards.
+- `tests/Feature/V0/AdsContractTest.php`: 42 tests (shape and field order, days_active, each filter and each quirk, pagination and clamping, every error path including revocation and a server error).
+- Mutation harness (generic now: `scratchpad/mutate.py` + a mutations file): 20 of 20 v0 mutations caught, files verified restored.
+- Full suite 96 passed; Pint clean.
+
+**Issues and fixes:**
+- The uncommitted custom-key files had already been discarded (the ingest work was committed separately), so my rollback of their migration failed silently, and the dev DB still had the `api_keys` table and its migration row. I dropped both (dev only) and removed the empty folders.
+- The curl smoke test again hit zsh not splitting a `$args` variable, and the error message printed a full local dev key. Those keys were deleted; the next run used explicit commands and never printed keys.
+- The revocation test first failed (200 instead of 400): the test client reuses one app instance and the auth guard caches the user from the earlier request. Real servers start each request with fresh guards (PHP-FPM; Octane resets them), and the curl check confirmed revoked keys fail. The test helper now calls `forgetGuards()` before each request, with a comment.
+
+## 9. Auth audit and fixes
+
+**Goal:** Check the Sanctum key auth against the Part 3 key MUST and close the gaps.
+
+**Prompts:**
+
+> ok. isnt it there something build in and ready for our task?
+
+> @test-auditor check if the auth now meets the requierements
+
+> just fix 1-6
+
+**Result:**
+- test-auditor: the code met the MUST, but only revocation and scopes were pinned by tests. Findings 1–6 were fixed. The soft-deletes idea was not adopted; `revoked_at` stays.
+- `ApiKeys::issue()` refuses an empty scope list and creates the key and its prefix in one transaction.
+- `ApiKeys::hasValidFormat()`: `AppServiceProvider` only passes keys in our `ghk_` format to Sanctum. `abc|x` used to reach a bigint lookup and throw a query error (masked as 400 on v0, would be 500 on v1). The `<id>|key` form is now rejected too, since we never hand it out.
+- New `tests/Feature/Keys/ApiKeysTest.php`: format and CRC32, only the SHA-256 stored (no column holds the plaintext), the 12-char prefix, no `token` in serialisation, lookup without the id, scopes deduplicated, empty scopes refused, revoke keeps the row with `revoked_at`, `last_used_at` set on use and not for revoked keys, malformed keys rejected with nothing reported.
+- New `tests/Feature/Keys/CreateApiKeyCommandTest.php`: default scope, every requested scope, the key printed exactly once and working, an unknown scope rejected with the allowed list and nothing created.
+
+**Verification:**
+- 11 of 11 mutations caught (`scratchpad/mutations_keys.py`), files verified restored.
+- Full suite 116 passed; Pint clean.
+
+**Issues and fixes:**
+- The new "nothing reported" test found a hidden bug: every unauthenticated API request without `Accept: application/json` tried to redirect to a `login` route that doesn't exist, so each bad key produced a reported `RouteNotFoundException` (v0 still answered 400). Fixed with `redirectGuestsTo(fn () => null)` in `bootstrap/app.php`; covered by the mutation run.
+- Not tested: the transaction around issuing (a failure between the two writes is hard to force). Rate limiting, key endpoints, v1 and MCP revocation are not built yet.
