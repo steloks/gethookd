@@ -50,6 +50,17 @@ Where the spec is ambiguous, this is what the code does and why.
 - The walk is pinned to the highest ad id when page 1 was read: ads with a higher id never appear, so new ads cannot push other ads onto pages already read. Both sort keys (`start_date`, `impression_rank`) never change after insert, so a deactivation cannot move an ad across a page boundary either. To see new ads, start a new walk.
 - Pinning by id is exact only if ads become visible in id order. Postgres hands out ids at insert, not at commit, so two writers inserting at once could commit out of order. Ingest cycles therefore take a Postgres advisory lock (`AdIngestor::tick`), so cycles never overlap, even with several ingest processes running. Ads are only ever inserted by ingest and the seed.
 
+### Rate limit
+
+- Each API key may make **60 requests per clock minute** (12:00:00–12:00:59, then 12:01:00–…). v0, v1 and the MCP server share one counter per key; the MCP server calls v1 with the caller's key, so it needs nothing of its own.
+- Over the limit: 429 `rate_limited` with `retry_after` and a `Retry-After` header, both the whole seconds until the minute ends (rounded up, so waiting that long always works).
+- Every request with a valid key counts, including ones then refused for their scope (403) or parameters (422): the limit protects the service from load, which those requests still cause. Requests without a valid key, and revoked keys, are refused before they are counted.
+- **v0 under the rate limit (a conflict in the spec):** v0 returns 400 `{"error":"Invalid request"}` for every error, but the rate limit must be shared with v0 and return 429 with `Retry-After`. v0 therefore returns **429**, with `Retry-After` and its usual body. It is the only v0 response that is not 400 or 200; every other v0 error is unchanged.
+- If Redis is unreachable, requests are refused (v1: 503 `unavailable`, retryable; v0: its usual 400) and the error is reported, rather than served without a limit.
+- Fixed windows are a deliberate trade-off (see below): a caller can send 60 requests at 12:00:59 and 60 more at 12:01:00.
+
+**Why fixed windows:** one Redis counter per key and minute, incremented and given an expiry in one Lua script, so concurrent requests can never both take the last slot (checked with 100 concurrent requests: exactly 60 succeeded). It is the simplest scheme to explain ("60 per clock minute"), costs one small key per active key, and gives an exact `Retry-After` for its own rule. The cost is the burst at a minute boundary: up to 120 requests within about a second. A sliding-window log would close that gap (at most 60 in *any* 60 seconds) at the cost of storing up to 60 timestamps per key, and a token bucket would smooth traffic to one request a second after a burst; either can replace `KeyRateLimiter` without touching its callers.
+
 ### Errors
 
 - Every non-v0 error uses one shape: `{"error": {"code", "message", "next_step", "retryable", "details"?, "retry_after"?}}`. The codes are listed in `api/app/Support/Errors/ErrorCode.php`.

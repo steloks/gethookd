@@ -576,3 +576,23 @@ Log of the important prompts used during this assessment. Add an entry per task,
 **Verification:**
 - Mutations: 18 run, 18 caught. The first run missed one (raw path instead of decoded path), because the `%5F` pattern already covered the encoded-underscore case; a key with percent-encoded letters was added to the test and the mutant is now caught.
 - Full suite passed; Pint clean.
+
+## 20. Per-key rate limit (Part 3, step 1)
+
+**Prompt:** "what kind of rate limiter u suggest using?" (I suggested a sliding-window log), then "implement the ratelimiter with fixed window, explain the tradeoffs".
+
+**What changed:**
+- `App\RateLimit\KeyRateLimiter`: 60 requests per key per clock minute. A Lua script does `INCR` and, on the first hit, `EXPIRE` (two windows) in one step. `retry_after` is the time until the minute ends, rounded up.
+- `RateLimitPerKey` middleware on the v0 and v1 groups, between `auth:sanctum` and the scope check. Over the limit it throws `ApiError(RateLimited)` with `retry_after` and `Retry-After`. If Redis fails, it reports the error and refuses with 503 `unavailable` instead of letting the request through.
+- v0: `bootstrap/app.php` renders the rate-limit error as 429 with `Retry-After` and v0's usual body. This conflicts with "400 for every error" in the v0 spec; the rate-limit MUST wins, recorded in the README.
+- Tests use Redis database 15 (`phpunit.xml`), flushed in `TestCase::setUp`, which refuses to flush any other database. Key ids restart with each fresh migration, so counters would otherwise carry over between runs.
+- OpenAPI: a `RateLimited` response (429) on every operation, with a required `Retry-After` header and required `retry_after`. Each is produced by a real request (`spendRateLimit()` in `tests/Pest.php` fills a key's minute).
+- `tests/Feature/RateLimit/RateLimitTest.php`:
+  - 60 allowed, then a 429 with the right `retry_after`; the part-second rounding; the reset at the next minute; shared between v0 and v1 with v0's body; each key on its own.
+  - Refused (403/422) requests count; invalid and revoked keys don't.
+  - The boundary burst is pinned as a deliberate trade-off.
+  - Counters expire; Redis down means refused.
+
+**Verification:**
+- Mutations: 16 run, 16 caught. The first run missed "round down instead of up", because the test sat at 59.4 s where both give 1. It was moved to 30.4 s, with a retry at 29 s (refused) and 30 s (allowed).
+- Smoke: 100 concurrent requests (v0 and v1 mixed, one key, `artisan serve` with 16 workers) gave exactly 60 × 200 and 40 × 429, with `Retry-After` matching the seconds left in the minute. The key was deleted afterwards.

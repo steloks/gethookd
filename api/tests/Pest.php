@@ -2,6 +2,8 @@
 
 use App\Auth\ApiKeys;
 use App\Enums\ApiScope;
+use App\Models\PersonalAccessToken;
+use App\RateLimit\KeyRateLimiter;
 use App\Support\Errors\ErrorCode;
 use App\Support\LocalUser;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -72,6 +74,17 @@ function v1(string $method, string $uri, ?string $key = null): TestResponse
     OpenApi::assertMatches($response, $method, $uri, $headers);
 
     return $response;
+}
+
+/**
+ * Uses up $count of a key's requests for the current minute (all of them by default) without going through HTTP.
+ */
+function spendRateLimit(string $key, int $count = KeyRateLimiter::LIMIT): void
+{
+    $id = PersonalAccessToken::findToken($key)->getKey();
+    foreach (range(1, $count) as $_) {
+        app(KeyRateLimiter::class)->hit($id, now());
+    }
 }
 
 /**

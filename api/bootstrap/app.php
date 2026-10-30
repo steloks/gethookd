@@ -2,6 +2,7 @@
 
 use App\Support\Errors\ApiError;
 use App\Support\Errors\ApiErrorRenderer;
+use App\Support\Errors\ErrorCode;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -37,9 +38,13 @@ return Application::configure(basePath: dirname(__DIR__))
 
         // v0 contract: every error, of any kind, is 400 {"error":"Invalid request"}.
         // Exceptions are still reported as usual; only the response is fixed.
+        // The one exception is the rate limit, which the assessment requires on v0 too: a 429 with
+        // Retry-After, keeping v0's body (see README, Assumptions).
         $exceptions->render(function (Throwable $e, Request $request) {
             if ($request->is('api/v0', 'api/v0/*')) {
-                return response()->json(['error' => 'Invalid request'], 400);
+                return $e instanceof ApiError && $e->errorCode === ErrorCode::RateLimited
+                    ? response()->json(['error' => 'Invalid request'], 429, $e->headers)
+                    : response()->json(['error' => 'Invalid request'], 400);
             }
 
             // Every other API path (v1, and unknown ones such as /api/v2) uses the one error shape.

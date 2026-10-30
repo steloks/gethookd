@@ -123,6 +123,8 @@ paths:
           $ref: '#/components/responses/InsufficientScope'
         '422':
           $ref: '#/components/responses/InvalidParameters'
+        '429':
+          $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
         default:
@@ -162,6 +164,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '422':
           $ref: '#/components/responses/InvalidParameters'
+        '429':
+          $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
         default:
@@ -193,6 +197,8 @@ paths:
           $ref: '#/components/responses/InsufficientScope'
         '422':
           $ref: '#/components/responses/InvalidParameters'
+        '429':
+          $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
         default:
@@ -206,6 +212,10 @@ components:
       description: |
         An API key (`ghk_…`) as `Authorization: Bearer <key>`, with the `search:read` scope. The same
         key works on v0 as the `api_key` query parameter; v1 does not read that parameter.
+
+        Each key may make 60 requests per clock minute (12:00:00–12:00:59, then 12:01:00–…), shared
+        by v0, v1 and the MCP server. Every request with a valid key counts, including ones refused
+        for their scope or parameters. Over the limit: 429 `rate_limited` with `retry_after`.
 
   schemas:
     Ad:
@@ -439,6 +449,29 @@ components:
                         enum: [invalid_parameters]
                       details:
                         minItems: 1
+    RateLimited:
+      description: The key has used its 60 requests for this clock minute (`rate_limited`, retryable). Wait `retry_after` seconds, the time until the minute ends, then send the same request again.
+      headers:
+        Retry-After:
+          required: true
+          description: Seconds until the limit resets (the same as `retry_after`).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 60
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Error'
+              - properties:
+                  error:
+                    required: [retry_after]
+                    properties:
+                      code:
+                        enum: [rate_limited]
+                      retry_after:
+                        maximum: 60
     InternalError:
       description: An unexpected failure on our side (`internal_error`, retryable).
       content:

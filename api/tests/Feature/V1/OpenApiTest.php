@@ -161,6 +161,12 @@ function documentedResponseRequests(): array
 {
     $adPath = fn () => '/api/v1/ads/'.Ad::factory()->create()->id;
     $readOnly = fn () => v1Key([ApiScope::KeysManage]);
+    $limited = function () {
+        $key = v1Key();
+        spendRateLimit($key);
+
+        return $key;
+    };
     $failingReads = function (string $model) {
         Exceptions::fake();
         $model::retrieved(fn () => throw new RuntimeException('boom'));
@@ -171,6 +177,7 @@ function documentedResponseRequests(): array
         'get /api/v1/ads 401' => fn () => v1('GET', '/api/v1/ads'),
         'get /api/v1/ads 403' => fn () => v1('GET', '/api/v1/ads', $readOnly()),
         'get /api/v1/ads 422' => fn () => v1('GET', '/api/v1/ads?nich=Skincare', v1Key()),
+        'get /api/v1/ads 429' => fn () => v1('GET', '/api/v1/ads', $limited()),
         'get /api/v1/ads 500' => function () use ($failingReads) {
             $key = v1Key();
             $failingReads(Ad::class);
@@ -182,6 +189,7 @@ function documentedResponseRequests(): array
         'get /api/v1/ads/{id} 403' => fn () => v1('GET', $adPath(), $readOnly()),
         'get /api/v1/ads/{id} 404' => fn () => v1('GET', '/api/v1/ads/999999', v1Key()),
         'get /api/v1/ads/{id} 422' => fn () => v1('GET', $adPath().'?fields=headline', v1Key()),
+        'get /api/v1/ads/{id} 429' => fn () => v1('GET', $adPath(), $limited()),
         'get /api/v1/ads/{id} 500' => function () use ($adPath, $failingReads) {
             [$path, $key] = [$adPath(), v1Key()];
             $failingReads(Ad::class);
@@ -192,6 +200,7 @@ function documentedResponseRequests(): array
         'get /api/v1/niches 401' => fn () => v1('GET', '/api/v1/niches'),
         'get /api/v1/niches 403' => fn () => v1('GET', '/api/v1/niches', $readOnly()),
         'get /api/v1/niches 422' => fn () => v1('GET', '/api/v1/niches?limit=5', v1Key()),
+        'get /api/v1/niches 429' => fn () => v1('GET', '/api/v1/niches', $limited()),
         'get /api/v1/niches 500' => function () use ($failingReads) {
             $key = v1Key();
             $failingReads(Niche::class);
@@ -240,6 +249,8 @@ function brokenResponses(): array
         '404 with another code' => ['GET', '/api/v1/ads/1', fn (bool $broken) => new JsonResponse($error($broken ? 'internal_error' : 'not_found'), 404)],
         '422 without details' => ['GET', '/api/v1/ads', fn (bool $broken) => new JsonResponse($error('invalid_parameters', $broken ? [] : $details), 422)],
         '422 with no problems' => ['GET', '/api/v1/ads', fn (bool $broken) => new JsonResponse($error('invalid_parameters', $broken ? ['details' => []] : $details), 422)],
+        '429 without Retry-After' => ['GET', '/api/v1/niches', fn (bool $broken) => new JsonResponse($error('rate_limited', ['retry_after' => 5]), 429, $broken ? [] : ['Retry-After' => '5'])],
+        '429 without retry_after' => ['GET', '/api/v1/niches', fn (bool $broken) => new JsonResponse($error('rate_limited', $broken ? [] : ['retry_after' => 5]), 429, ['Retry-After' => '5'])],
         'applied niche not a slug' => ['GET', '/api/v1/ads', fn (bool $broken) => new JsonResponse($page($broken ? 'Skincare' : 'skincare'), 200)],
         'success on an undocumented v1 path' => ['GET', '/api/v1/other', fn (bool $broken) => new JsonResponse($error('not_found'), $broken ? 200 : 404)],
         'error on an undocumented v1 path, with an extra field' => ['GET', '/api/v1/other', fn (bool $broken) => new JsonResponse($error('not_found', $broken ? ['trace' => 'x'] : []), 404)],
