@@ -81,6 +81,15 @@ it('returns 404 not_found for an unknown path', function (string $path) {
     expect($response->json('error.message'))->toBe("There is no GET {$path}.");
 })->with(['/api/v1/nothing', '/api/v2/ads']);
 
+it('never echoes a long path in full or a key pasted into the path', function () {
+    $key = 'ghk_'.str_repeat('k', 48);
+    $response = v1('GET', '/api/v1/'.$key.'/'.str_repeat('x', 3000), v1Key());
+
+    assertApiError($response, ErrorCode::NotFound);
+    expect(mb_strlen($response->json('error.message')))->toBeLessThan(130)
+        ->and($response->getContent())->not->toContain($key)->toContain('ghk_[redacted]');
+});
+
 it('returns 405 method_not_allowed with an Allow header', function () {
     $response = v1('POST', $this->adPath, v1Key());
 
@@ -118,6 +127,47 @@ describe('500 internal_error', function () {
     });
 });
 
+describe('other HTTP errors keep their meaning', function () {
+    beforeEach(function () {
+        Route::middleware('api')->get('api/v1/__abort/{status}', function (int $status) {
+            abort($status, 'framework text not meant for callers', request()->has('wait') ? ['Retry-After' => request('wait')] : []);
+        });
+    });
+
+    it('maps a client error to a non-retryable bad_request', function (int $status) {
+        $response = v1('GET', "/api/v1/__abort/{$status}");
+
+        assertApiError($response, ErrorCode::BadRequest);
+        expect($response->getContent())->not->toContain('framework text');
+    })->with([400, 413, 414, 431]);
+
+    it('maps 429 to rate_limited with how long to wait, in the body and the header', function () {
+        $response = v1('GET', '/api/v1/__abort/429?wait=17');
+
+        assertApiError($response, ErrorCode::RateLimited, withRetryAfter: true);
+        expect($response->json('error.retry_after'))->toBe(17);
+        $response->assertHeader('Retry-After', '17');
+    });
+
+    it('always tells a rate-limited caller how long to wait', function () {
+        $response = v1('GET', '/api/v1/__abort/429');
+
+        assertApiError($response, ErrorCode::RateLimited, withRetryAfter: true);
+        expect($response->json('error.retry_after'))->toBeGreaterThanOrEqual(1);
+        $response->assertHeader('Retry-After');
+    });
+
+    it('maps 503 to a retryable unavailable', function () {
+        assertApiError(v1('GET', '/api/v1/__abort/503'), ErrorCode::Unavailable);
+    });
+
+    it('maps any other server error to internal_error', function () {
+        Exceptions::fake();
+
+        assertApiError(v1('GET', '/api/v1/__abort/502'), ErrorCode::InternalError);
+    });
+});
+
 it('leaves v0 errors untouched', function () {
     $response = $this->getJson('/api/v0/ads');
 
@@ -139,17 +189,21 @@ describe('error code registry', function () {
             array_map(fn (ErrorCode $code) => $code->value, ErrorCode::cases()),
             array_map(fn (ErrorCode $code) => $code->status(), ErrorCode::cases()),
         ))->toBe([
+            'bad_request' => 400,
             'unauthenticated' => 401,
             'insufficient_scope' => 403,
             'not_found' => 404,
             'method_not_allowed' => 405,
+            'invalid_parameters' => 422,
+            'rate_limited' => 429,
             'internal_error' => 500,
+            'unavailable' => 503,
         ]);
     });
 
-    it('only marks server-side failures as retryable', function () {
+    it('only marks waiting out a limit and server-side failures as retryable', function () {
         $retryable = array_filter(ErrorCode::cases(), fn (ErrorCode $code) => $code->retryable());
 
-        expect(array_map(fn (ErrorCode $code) => $code->value, array_values($retryable)))->toBe(['internal_error']);
+        expect(array_map(fn (ErrorCode $code) => $code->value, array_values($retryable)))->toBe(['rate_limited', 'internal_error', 'unavailable']);
     });
 });

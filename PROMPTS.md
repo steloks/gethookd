@@ -385,3 +385,54 @@ Log of the important prompts used during this assessment. Add an entry per task,
 **Result:** `GET /api/v1/niches` returns `{"data":[{slug, name, keywords}]}` in catalog order, behind Bearer auth and `search:read`. It is the same code as the route removed in task 10.
 
 **Verification:** `tests/Feature/V1/NichesTest.php` (the exact list and one exact entry; 401 without a key, 403 without `search:read`). Mutations 4 of 4 caught. Full suite 150 passed; Pint clean.
+
+## 13. v1 search: filters, validation, sorts (Part 1, step 3)
+
+**Goal:** `GET /api/v1/ads` with every Part 1 filter and both sorts, strict validation with suggestions, and the applied filters echoed. Cursor pagination is step 4.
+
+**Prompt:**
+
+> ok now check again all the required things about the filter search and implement it. started_after should be on or after, and use comma-separated for the niches
+
+**Result:**
+- `app/Search/`:
+  - `SearchRequestParser`: strict validation of the raw query string.
+  - `QueryString`: raw pairs, because PHP keeps only the last of a repeated parameter and renames `a.b`.
+  - `Suggest`: aliases, case-insensitive match, small edit distance.
+  - `SearchParams`, `SearchSort`, `AdSearch`.
+- Parameters: `q` (substring on headline/body, case-insensitive, `%`/`_` literal, max 200), `niche` (comma-separated slugs), `format`, `status`, `started_after` (YYYY-MM-DD, on or after, UTC), `sort` (`newest` default | `impressions`), `limit` (1–100, default 20; above 100 is an error, not a clamp).
+- Values must be exact: `Skincare` is rejected with "did you mean `skincare`" (the spec's example). Normalisation is only trimming, removing duplicate niches (echoed in catalog order) and filling in defaults.
+- One 422 `invalid_parameters` lists every problem in `error.details` (`param`, `issue`, `message`, `allowed`?, `did_you_mean`?). Issues: `unknown_parameter`, `invalid_value`, `empty_value`, `out_of_range`, `too_long`, `repeated_parameter`, `array_syntax`. When every problem has a fix, `next_step` is the corrected call (`Send instead: GET /api/v1/ads?...`). The `started_after` message includes today's date so an agent can compute "last 30 days".
+- Invalid UTF-8 and NUL bytes are rejected with a 422 before they reach Postgres (which would fail with a 500).
+- Sorts: `newest` = `start_date DESC, id DESC`; `impressions` = `impression_rank ASC NULLS LAST, id DESC`. New migration: index `(impression_rank ASC NULLS LAST, id DESC)`.
+- Response: `{data: [AdResource...], applied_filters: {...only applied...}, sort, limit}`.
+- `ApiError` gained optional `details`; new registry code `invalid_parameters` (422).
+
+**Verification:**
+- `tests/Feature/V1/SearchTest.php`: one test per filter with fixture ads the filter must exclude, AND across filters, both sorts (nulls last, ties), applied filters normalised, and every validation case.
+- Mutations: 32 run; 31 caught at first. Missed: removing the `id` tiebreak, because both sort indexes end in `id` and Postgres returned ties in id order anyway. Added a test that inserts tied ads with shuffled ids and turns off index scans (`SET LOCAL`), so only an explicit `ORDER BY id` passes; the tiebreak break is now caught.
+- Bug found by the tests: an unknown parameter with no suggestion still produced a "Send instead" call that silently dropped it. Fixed.
+- Smoke test over HTTP on the 20k seeded ads (key written to a scratch file, never printed, deleted after): filters and sorts correct, 20–30 ms per query after warm-up, and the 422 gives the corrected call.
+- Full suite 212 passed; Pint clean.
+
+**For the README Assumptions:** `started_after` is inclusive; `niche` is comma-separated; values must be exact (suggested, not auto-corrected); `limit` above 100 is an error.
+
+## 14. Fixes from the v1 test audit
+
+**Prompt:**
+> @test-auditor check the last implemented routes and make sure that everyting is ok by the requirements
+
+> fix those
+
+**Result:**
+- HIGH: `niche=%FF&niche=skincare` returned a retryable 500, because the repeated-niche `did_you_mean` copied the invalid bytes and the JSON could not be encoded. The suggestion is now only given for valid text and lists each slug once (`niche=skincare&niche=skincare` suggests `skincare`).
+- `/ads/{id}` and `/niches` now reject any query parameter with the same 422 (`RejectQueryParameters` middleware, after auth) instead of ignoring it.
+- `sort=impressions` responses carry a `sort_note` saying ranks are within one brand, not across brands (wording in `SearchSort::note()`, to reuse in OpenAPI and MCP).
+- HTTP exceptions not raised by our code keep their meaning: new registry codes `bad_request` (400, any 4xx), `rate_limited` (429, retryable, always with `retry_after` and the header), `unavailable` (503, retryable). Everything else stays `internal_error`.
+- `SafeText`: echoed input (parameter names and values, 404/405 paths) is scrubbed to UTF-8, truncated, and anything like `ghk_…` is replaced with `ghk_[redacted]`. The unknown-niche message names at most 5, then "and N more".
+- `README.md` started, with the Assumptions section.
+
+**Verification:**
+- New tests: the UTF-8 repeat case (3 forms, nothing reported), dedupe, the 5-niche cap, key redaction in values/names/paths, long paths, 400/413/414/431/429/503/502 mapping, `sort_note` present only for impressions, unknown params on detail and niches, `+`/`%20` in `q`, percent-encoded names, 401/403 on `/ads`, HEAD, OPTIONS preflight without auth or queries.
+- Mutations: 13 run, 13 caught.
+- Full suite 245 passed; Pint clean.

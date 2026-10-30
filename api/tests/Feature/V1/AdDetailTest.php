@@ -109,3 +109,13 @@ it('returns 404 for an id that cannot exist, without querying the database', fun
     'past bigint' => ['99999999999999999999'],
     'leading space' => [' 1'],
 ]);
+
+it('rejects query parameters instead of ignoring them', function (string $query) {
+    $path = "/api/v1/ads/{$this->active->id}";
+
+    $response = v1('GET', "{$path}?{$query}", $this->key);
+
+    assertApiError($response, ErrorCode::InvalidParameters, withDetails: true);
+    expect($response->json('error.details.0.issue'))->toBe('unknown_parameter')
+        ->and($response->json('error.next_step'))->toBe("Send instead: GET {$path}");
+})->with(['fields=headline', 'fields', 'id=1&id=2']);

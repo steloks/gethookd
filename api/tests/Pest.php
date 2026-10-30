@@ -70,13 +70,14 @@ function v1(string $method, string $uri, ?string $key = null): TestResponse
 }
 
 /**
- * The one error shape: exactly these fields, with the code's registry values.
+ * The one error shape: exactly these fields (details and retry_after only where the error uses them), with the code's registry values.
  */
-function assertApiError(TestResponse $response, ErrorCode $code): void
+function assertApiError(TestResponse $response, ErrorCode $code, bool $withDetails = false, bool $withRetryAfter = false): void
 {
     $response->assertStatus($code->status());
+    $fields = ['code', 'message', 'next_step', 'retryable', ...($withDetails ? ['details'] : []), ...($withRetryAfter ? ['retry_after'] : [])];
     expect($response->json())->toHaveKey('error')->toHaveCount(1)
-        ->and(array_keys($response->json('error')))->toBe(['code', 'message', 'next_step', 'retryable'])
+        ->and(array_keys($response->json('error')))->toBe($fields)
         ->and($response->json('error.code'))->toBe($code->value)
         ->and($response->json('error.retryable'))->toBe($code->retryable())
         ->and($response->json('error.message'))->toBeString()->not->toBeEmpty()
