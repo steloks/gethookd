@@ -185,7 +185,7 @@ describe('sorting', function () {
     it('impressions says the ranks are within one brand, not across brands', function () {
         $response = search('sort=impressions')->assertOk();
 
-        expect(array_keys($response->json()))->toBe(['data', 'applied_filters', 'sort', 'sort_note', 'limit'])
+        expect(array_keys($response->json()))->toBe(['data', 'applied_filters', 'sort', 'sort_note', 'limit', 'next_cursor'])
             ->and($response->json('sort_note'))->toBe(
                 "impression_rank compares ads within one brand only (1 = that brand's most-shown ad). "
                 ."Results list every brand's rank-1 ads, then rank 2, and so on, with ads without impression data last. "
@@ -194,7 +194,7 @@ describe('sorting', function () {
     });
 
     it('newest needs no note', function () {
-        expect(array_keys(search()->assertOk()->json()))->toBe(['data', 'applied_filters', 'sort', 'limit']);
+        expect(array_keys(search()->assertOk()->json()))->toBe(['data', 'applied_filters', 'sort', 'limit', 'next_cursor']);
     });
 });
 
@@ -261,7 +261,7 @@ describe('validation', function () {
             'param' => 'nich',
             'issue' => 'unknown_parameter',
             'message' => '"nich" is not a search parameter.',
-            'allowed' => ['q', 'niche', 'format', 'status', 'started_after', 'sort', 'limit'],
+            'allowed' => ['q', 'niche', 'format', 'status', 'started_after', 'sort', 'limit', 'cursor'],
             'did_you_mean' => 'niche',
         ])
             ->and($response->json('error.next_step'))->toBe('Send instead: GET /api/v1/ads?niche=skincare');

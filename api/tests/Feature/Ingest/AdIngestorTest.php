@@ -246,3 +246,19 @@ it('runs the requested number of cycles from the command line', function () {
 
     expect(DB::table('ads')->count())->toBeGreaterThanOrEqual($before + 3);
 });
+
+// The search cursor's snapshot needs ids to become visible in increasing order, which only holds
+// if two ingest processes can never run a cycle at the same time.
+it('waits for another process that is running a cycle', function () {
+    config(['database.connections.other_process' => config('database.connections.'.config('database.default'))]);
+    $other = DB::connection('other_process');
+    $other->statement('SELECT pg_advisory_lock(?)', [AdIngestor::LOCK_KEY]);
+
+    try {
+        DB::statement("SET LOCAL lock_timeout = '200ms'");
+        expect(fn () => ingestor()->tick($this->now))->toThrow(QueryException::class, 'lock timeout');
+    } finally {
+        $other->statement('SELECT pg_advisory_unlock(?)', [AdIngestor::LOCK_KEY]);
+        DB::purge('other_process');
+    }
+});

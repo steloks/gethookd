@@ -26,6 +26,7 @@ final readonly class SearchParams
         public ?CarbonImmutable $startedAfter = null,
         public SearchSort $sort = SearchSort::Newest,
         public int $limit = self::DEFAULT_LIMIT,
+        public ?Cursor $cursor = null,
     ) {}
 
     /**

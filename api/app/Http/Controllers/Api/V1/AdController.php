@@ -25,13 +25,17 @@ class AdController extends Controller
     {
         $params = $parser->parse((string) $request->server('QUERY_STRING', ''), CarbonImmutable::now('UTC'));
 
-        return response()->json(array_filter([
-            'data' => AdResource::collection($search->run($params)),
+        $page = $search->run($params);
+
+        return response()->json([
+            'data' => AdResource::collection($page->ads),
             'applied_filters' => (object) $params->appliedFilters(),
             'sort' => $params->sort->value,
-            'sort_note' => $params->sort->note(),
+            ...($params->sort->note() === null ? [] : ['sort_note' => $params->sort->note()]),
             'limit' => $params->limit,
-        ], fn ($value) => $value !== null));
+            // Send it back as ?cursor= (alone, or with the same filters) for the next page. Null on the last page.
+            'next_cursor' => $page->nextCursor,
+        ]);
     }
 
     public function show(string $id): AdResource

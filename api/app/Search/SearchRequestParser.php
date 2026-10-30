@@ -21,7 +21,7 @@ use Carbon\CarbonImmutable;
  */
 final class SearchRequestParser
 {
-    public const PARAMS = ['q', 'niche', 'format', 'status', 'started_after', 'sort', 'limit'];
+    public const PARAMS = ['q', 'niche', 'format', 'status', 'started_after', 'sort', 'limit', 'cursor'];
 
     public const MAX_Q_LENGTH = 200;
 
@@ -47,6 +47,9 @@ final class SearchRequestParser
         'page_size' => 'limit',
         'size' => 'limit',
         'count' => 'limit',
+        'next_cursor' => 'cursor',
+        'page_token' => 'cursor',
+        'next_page_token' => 'cursor',
     ];
 
     private const SORT_ALIASES = [
@@ -75,7 +78,18 @@ final class SearchRequestParser
         $this->corrected = [];
         $params = [];
 
-        foreach ($this->groupByParam(QueryString::pairs($queryString)) as $name => $raw) {
+        $grouped = $this->groupByParam(QueryString::pairs($queryString));
+
+        // A cursor carries its search: parameters the caller left out are taken from it, and
+        // the ones they sent must match it (checked below, after normalising).
+        $cursor = null;
+        if (isset($grouped['cursor'])) {
+            $cursor = $this->cursor($grouped['cursor']);
+            unset($grouped['cursor']);
+            $grouped += $cursor?->query() ?? [];
+        }
+
+        foreach ($grouped as $name => $raw) {
             if (! self::isText($raw)) {
                 $this->problem($name, 'invalid_value', "{$name} is not valid UTF-8 text.");
                 $this->fixable = false;
@@ -98,7 +112,7 @@ final class SearchRequestParser
             throw $this->error();
         }
 
-        return new SearchParams(
+        $search = new SearchParams(
             q: $params['q'] ?? null,
             niches: $params['niche'] ?? [],
             format: isset($params['format']) ? AdFormat::from($params['format']) : null,
@@ -106,7 +120,63 @@ final class SearchRequestParser
             startedAfter: $params['started_after'] ?? null,
             sort: isset($params['sort']) ? SearchSort::from($params['sort']) : SearchSort::Newest,
             limit: $params['limit'] ?? SearchParams::DEFAULT_LIMIT,
+            cursor: $cursor,
         );
+
+        if ($cursor !== null) {
+            $this->checkCursorMatches($cursor, $search);
+        }
+
+        return $search;
+    }
+
+    private function cursor(string $raw): ?Cursor
+    {
+        if (trim($raw) === '') {
+            return $this->empty('cursor', 'Leave cursor out to get the first page.');
+        }
+
+        $cursor = Cursor::decode($raw);
+        if ($cursor === null) {
+            // Not echoed: a cursor is long and means nothing to the caller.
+            $this->problem('cursor', 'invalid_value',
+                'cursor is not one this API issued, or it was changed. Send next_cursor exactly as a search response returned it, or leave cursor out to start again from the first page.');
+            $this->fixable = false;
+
+            return null;
+        }
+
+        $this->accept('cursor', $raw);
+
+        return $cursor;
+    }
+
+    /**
+     * A cursor continues one search. Different filters or sort would make its position meaningless.
+     */
+    private function checkCursorMatches(Cursor $cursor, SearchParams $search): void
+    {
+        $sent = [...$search->appliedFilters(), 'sort' => $search->sort->value];
+        $expected = [...$cursor->filters, 'sort' => $cursor->sort->value];
+        $differs = array_values(array_filter(
+            ['q', 'niche', 'format', 'status', 'started_after', 'sort'],
+            fn (string $name) => ($sent[$name] ?? null) !== ($expected[$name] ?? null),
+        ));
+
+        if ($differs !== []) {
+            $this->problem('cursor', 'cursor_mismatch',
+                'cursor continues a search with a different '.implode(', ', $differs).'. '
+                .'Send the cursor alone (it remembers the search) or with the same parameters; to change the search, leave cursor out to start from the first page.');
+            $this->fixable = false;
+
+            $newSearch = $this->corrected;
+            unset($newSearch['cursor']);
+
+            throw $this->error(
+                'To continue the earlier search: GET /api/v1/ads?cursor='.rawurlencode($this->corrected['cursor'])
+                .'. To run the new search from its first page: GET /api/v1/ads'.self::queryOf($newSearch),
+            );
+        }
     }
 
     /**
@@ -127,7 +197,7 @@ final class SearchRequestParser
             if (preg_match('/\A(\w+)\[[^\]]*\]\z/', $name, $match) && in_array($match[1], self::PARAMS, true)) {
                 $param = $match[1];
                 $this->problem($name, 'array_syntax', "Send {$param} as a plain parameter, not as {$this->show($name)}."
-                    . ($param === 'niche' ? ' For several niches, separate the slugs with commas.' : ''), didYouMean: $param);
+                    .($param === 'niche' ? ' For several niches, separate the slugs with commas.' : ''), didYouMean: $param);
             } elseif (! in_array($name, self::PARAMS, true)) {
                 $param = Suggest::closest($name, self::PARAMS, self::PARAM_ALIASES);
                 $this->problem($name, 'unknown_parameter', "{$this->show($name)} is not a search parameter.", self::PARAMS, $param);
@@ -175,7 +245,7 @@ final class SearchRequestParser
         }
 
         if (mb_strlen($q) > self::MAX_Q_LENGTH) {
-            $this->problem('q', 'too_long', 'q is longer than ' . self::MAX_Q_LENGTH . ' characters. Search for a shorter phrase.');
+            $this->problem('q', 'too_long', 'q is longer than '.self::MAX_Q_LENGTH.' characters. Search for a shorter phrase.');
             $this->fixable = false;
 
             return null;
@@ -211,7 +281,7 @@ final class SearchRequestParser
             $this->problem(
                 'niche',
                 'invalid_value',
-                'Unknown niche ' . self::firstFew($unknown) . '. niche takes slugs such as "pet-supplies", separated by commas; GET /api/v1/niches lists them.',
+                'Unknown niche '.self::firstFew($unknown).'. niche takes slugs such as "pet-supplies", separated by commas; GET /api/v1/niches lists them.',
                 $slugs,
                 $allFixed ? implode(',', array_unique($fixed)) : null
             );
@@ -302,7 +372,7 @@ final class SearchRequestParser
         $this->problem(
             'limit',
             $tooBig ? 'out_of_range' : 'invalid_value',
-            'limit must be a whole number from 1 to ' . SearchParams::MAX_LIMIT . '.',
+            'limit must be a whole number from 1 to '.SearchParams::MAX_LIMIT.'.',
             didYouMean: $tooBig ? (string) SearchParams::MAX_LIMIT : null
         );
         $this->fixable = $this->fixable && $tooBig;
@@ -315,7 +385,7 @@ final class SearchRequestParser
      */
     private static function listItems(string $raw): array
     {
-        return array_values(array_filter(array_map('trim', explode(',', $raw)), fn(string $item) => $item !== ''));
+        return array_values(array_filter(array_map('trim', explode(',', $raw)), fn (string $item) => $item !== ''));
     }
 
     private static function isText(string $raw): bool
@@ -332,7 +402,7 @@ final class SearchRequestParser
     {
         $more = count($items) - $shown;
 
-        return implode(', ', array_slice($items, 0, $shown)) . ($more > 0 ? " and {$more} more" : '');
+        return implode(', ', array_slice($items, 0, $shown)).($more > 0 ? " and {$more} more" : '');
     }
 
     private function accept(string $name, string $value): string
@@ -371,29 +441,32 @@ final class SearchRequestParser
         $this->problems[] = $problem;
     }
 
-    private function error(): ApiError
+    private function error(?string $nextStep = null): ApiError
     {
         $names = implode(', ', array_unique(array_column($this->problems, 'param')));
         $count = count($this->problems);
 
         return new ApiError(
             ErrorCode::InvalidParameters,
-            ($count === 1 ? '1 problem' : "{$count} problems") . " with the search parameters: {$names}. See details.",
-            $this->fixable ? 'Send instead: GET /api/v1/ads' . $this->correctedQuery() : null,
+            ($count === 1 ? '1 problem' : "{$count} problems")." with the search parameters: {$names}. See details.",
+            $nextStep ?? ($this->fixable ? 'Send instead: GET /api/v1/ads'.self::queryOf($this->corrected) : null),
             details: $this->problems,
         );
     }
 
-    private function correctedQuery(): string
+    /**
+     * @param  array<string, string>  $params
+     */
+    private static function queryOf(array $params): string
     {
         $parts = [];
         foreach (self::PARAMS as $name) {
-            if (isset($this->corrected[$name])) {
-                $parts[] = $name . '=' . implode(',', array_map('rawurlencode', explode(',', $this->corrected[$name])));
+            if (isset($params[$name])) {
+                $parts[] = $name.'='.implode(',', array_map('rawurlencode', explode(',', $params[$name])));
             }
         }
 
-        return $parts === [] ? '' : '?' . implode('&', $parts);
+        return $parts === [] ? '' : '?'.implode('&', $parts);
     }
 
     /**

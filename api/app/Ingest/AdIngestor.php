@@ -12,7 +12,9 @@ use Random\Randomizer;
 /**
  * One cycle of the live ingest: discover 1–5 new ads and stop 1–2 running ones.
  *
- * Each cycle is one transaction, so readers see all of a cycle's changes or none.
+ * Each cycle is one transaction, so readers see all of a cycle's changes or none. Cycles never
+ * overlap, even across processes, so ad ids become visible in increasing order; the search
+ * cursor's snapshot (highest id at page 1) relies on that.
  */
 final class AdIngestor
 {
@@ -31,6 +33,9 @@ final class AdIngestor
 
     public const NULL_RANK_RATIO = 0.40;
 
+    /** Advisory lock key that serialises ingest cycles across processes. */
+    public const LOCK_KEY = 74_201_001;
+
     /** Share of a brand's new ads that go to the niche it advertises in most. */
     private const MAIN_NICHE_RATIO = 0.85;
 
@@ -46,6 +51,10 @@ final class AdIngestor
         $now = $now->utc();
 
         return DB::transaction(function () use ($now) {
+            // Held until commit: a second ingest process waits here instead of interleaving its
+            // inserts, so an ad can never commit with an id below one already visible.
+            DB::statement('SELECT pg_advisory_xact_lock(?)', [self::LOCK_KEY]);
+
             $inserted = [];
             $count = $this->random->getInt(self::MIN_INSERTS, self::MAX_INSERTS);
             for ($i = 0; $i < $count; $i++) {

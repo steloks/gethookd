@@ -436,3 +436,71 @@ Log of the important prompts used during this assessment. Add an entry per task,
 - New tests: the UTF-8 repeat case (3 forms, nothing reported), dedupe, the 5-niche cap, key redaction in values/names/paths, long paths, 400/413/414/431/429/503/502 mapping, `sort_note` present only for impressions, unknown params on detail and niches, `+`/`%20` in `q`, percent-encoded names, 401/403 on `/ads`, HEAD, OPTIONS preflight without auth or queries.
 - Mutations: 13 run, 13 caught.
 - Full suite 245 passed; Pint clean.
+
+## 15. v1 cursor pagination (Part 1, step 4)
+
+**Prompt:**
+> continue with cursor
+
+**Result:**
+- `app/Search/Cursor.php`: opaque cursor, base64url JSON + HMAC-SHA256 (with `APP_KEY`, truncated to 16 bytes). It carries the sort, the normalised filters, the limit, the snapshot (highest ad id at page 1) and the last ad's sort key and id. After the signature check, each field is still validated, so a bad payload can never reach SQL.
+- `AdSearch` returns a `SearchPage`:
+  - Every page is bound to `id <= snapshot`.
+  - Keyset for `newest`: `(start_date, id) < (d, i)`.
+  - Keyset for `impressions`: `rank > r OR (rank = r AND id < i) OR rank IS NULL`, or `rank IS NULL AND id < i` once the walk is in the null section.
+  - Fetches `limit + 1` rows to know whether there is a next page.
+- Parser: `cursor` is a parameter, with aliases `next_cursor`, `page_token`, `next_page_token` and `after`.
+  - A valid cursor fills in the filters, sort and limit the caller left out.
+  - Parameters that were sent must normalise to the cursor's own; otherwise there is one 422 `cursor_mismatch` naming them. `limit` may differ.
+  - An invalid cursor is a 422 `invalid_value`, and the cursor is not echoed.
+- Response gained `next_cursor` (null on the last page).
+- README: pagination section with the guarantees, including the commit-order caveat.
+
+**Verification:**
+- `tests/Feature/V1/CursorTest.php` (47 tests):
+  - Walks with limits 1, 3 and 7 equal one big page, for both sorts and with no filter, two niches or `status=active`.
+  - The last page being exactly full.
+  - The impressions walk crossing into the null section at a page boundary, and paging inside it.
+  - A walk with the real `AdIngestor` tick between pages, plus adversarial inserts (newest date, oldest date, a rank-1 tie, the head of the null section):
+    - Without a filter, the walk returns exactly the ads that existed at page 1, in order.
+    - With `status=active`, nothing repeats, every ad still active is returned, and no new ad appears.
+  - Cursor alone, cursor with the same parameters spelled differently, cursor with a different limit.
+  - Mismatches.
+  - Alias suggestion.
+  - 10 kinds of invalid cursor (including a re-encoded payload with the old signature, another `APP_KEY`, and signed-but-malformed payloads), none reported as an error.
+- Mutations: 14 run, 14 caught. They covered removing the snapshot, re-reading it each page, `<` → `<=` in both keysets, dropping the null branch, reversing it, `>` → `>=`, no extra row, no signature check, no sort-key validation, no mismatch check, the cursor not carrying the search, and the cursor overriding parameters that were sent.
+- Smoke test over HTTP on the seeded DB with `ads:ingest --interval=100` running throughout. The key was written to a scratch file, never printed, and deleted afterwards. A full walk at limit 100 took 201 pages for `newest` and 204 for `impressions`, with 0 duplicates. p50 was about 47 ms per page and the worst page 222 ms.
+- Full suite 292 passed; Pint clean.
+
+## 16. Fixes from the cursor audit
+
+**Prompt:**
+> @test-auditor check the cursor pagination, feel free to suggest better realization
+
+> yes go on, fix it
+
+**Result:** The auditor found the design correct and recommended keeping it. Fixed:
+- Deep `sort=impressions` pages re-read the index from rank 1, because Postgres could only apply the OR-ed keyset condition as a filter. They are now two index range scans:
+  - First the ranked ads, with the bound `rank >= r AND (rank > r OR id < i)`.
+  - Then, if the page is not full, the ads without a rank (`id < i` once inside that section).
+  - EXPLAIN on the 20k seed, cursor at rank 30: 5,543 buffers / 92 ms before, 76 buffers / 0.07 ms after.
+- README guarantees:
+  - "ads with an id above the page-1 snapshot never appear", replacing "ads added after page 1 never appear".
+  - New: what `status=inactive` can return mid-walk.
+  - The commit-order caveat is now enforced rather than assumed: `AdIngestor::tick` takes `pg_advisory_xact_lock`, so ingest cycles never overlap across processes.
+- Dropped the `after` → `cursor` alias (agents mean a date by "after").
+- A `cursor_mismatch` now gives both calls: continue the earlier search, or run the new one from page 1.
+- `Cursor::MAX_LENGTH` raised to 4096 (worst case was about 2,000). `checkdate()` added for the signed sort key.
+
+**Verification:**
+- New tests:
+  - Walk equivalence also with `q=serum` and with `format=video&started_after=…`.
+  - A forced deactivation of an ad the walk had not reached yet (returned without a filter, dropped with `status=active`).
+  - A `status=inactive` walk.
+  - The longest possible search fits in a cursor.
+  - An impossible date in a signed cursor is a 422.
+  - `after` gets no cursor suggestion.
+  - The mismatch `next_step` is pinned.
+  - An ingest cycle waits on another connection holding the advisory lock (lock timeout).
+- Mutations: 20 run, 19 caught. The miss over-fetches unranked rows in the top-up; it is an equivalent mutant, because `run()` trims to `limit`, so pages are identical and only a few extra rows are read.
+- Full suite 311 passed; Pint clean. HTTP walk on the seeded DB with `ads:ingest --interval=100` running: newest 207 pages / 20,601 ads, impressions 209 pages / 20,879 ads, 0 duplicates, p50 about 50 ms per page.

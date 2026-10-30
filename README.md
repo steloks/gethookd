@@ -1,6 +1,6 @@
 # GetHookd ad search — v1 API and MCP server
 
-Work in progress for the GetHookd "Fullstack Engineer (API & MCP)" assessment. Done so far: the data model, deterministic seed, live ingest script, the frozen v0 endpoint with its contract test, API keys, and the v1 endpoints `GET /api/v1/ads`, `GET /api/v1/ads/{id}` and `GET /api/v1/niches`. Setup instructions (`make up`) come with the Docker/Makefile step.
+Work in progress for the GetHookd "Fullstack Engineer (API & MCP)" assessment. Done so far: the data model, deterministic seed, live ingest script, the frozen v0 endpoint with its contract test, API keys, and the v1 endpoints `GET /api/v1/ads` (with cursor pagination), `GET /api/v1/ads/{id}` and `GET /api/v1/niches`. Setup instructions (`make up`) come with the Docker/Makefile step.
 
 ## Assumptions
 
@@ -28,6 +28,21 @@ Where the spec is ambiguous, this is what the code does and why.
 - Unknown parameters are rejected on every v1 endpoint, including `/ads/{id}` and `/niches`, which take none.
 - `sort=impressions` orders by the within-brand rank: every brand's rank-1 ads, then rank 2, and so on, with ads without impression data last. The response includes a `sort_note` saying this is not a cross-brand ranking.
 - Ties in either sort are broken by `id`, highest first.
+
+### Pagination (`cursor`)
+
+- Every search response has `next_cursor`: send it back as `?cursor=` for the next page. It is `null` on the last page.
+- The cursor carries the search (filters, sort, limit), so `?cursor=…` alone is enough. Sending it with the same filters also works. Sending it with a different filter or sort is a 422 `cursor_mismatch`, because the position would mean nothing in another search. `limit` may change from page to page.
+- Cursors are opaque and signed with `APP_KEY`. A cursor that was changed, or issued under another key, is a 422. Rotating `APP_KEY` invalidates walks in progress. Cursors do not expire.
+
+**Guarantees while ads are being ingested and deactivated during a walk** (proved by `tests/Feature/V1/CursorTest.php`, which runs the real ingest cycle between pages):
+
+- No ad is ever returned twice in one walk.
+- Without a `status` filter, the walk returns exactly the ads that matched when page 1 was read, in the order page 1 implied. An ad deactivated mid-walk is still returned, with its current status.
+- With `status=active`, an ad deactivated before its page is read is left out. Nothing else is left out.
+- With `status=inactive`, an ad deactivated mid-walk may also appear on a later page (it matches by the time that page is read). Nothing else is added.
+- The walk is pinned to the highest ad id when page 1 was read: ads with a higher id never appear, so new ads cannot push other ads onto pages already read. Both sort keys (`start_date`, `impression_rank`) never change after insert, so a deactivation cannot move an ad across a page boundary either. To see new ads, start a new walk.
+- Pinning by id is exact only if ads become visible in id order. Postgres hands out ids at insert, not at commit, so two writers inserting at once could commit out of order. Ingest cycles therefore take a Postgres advisory lock (`AdIngestor::tick`), so cycles never overlap, even with several ingest processes running. Ads are only ever inserted by ingest and the seed.
 
 ### Errors
 
