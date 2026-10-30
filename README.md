@@ -2,6 +2,11 @@
 
 Work in progress for the GetHookd "Fullstack Engineer (API & MCP)" assessment. Done so far: the data model, deterministic seed, live ingest script, the frozen v0 endpoint with its contract test, API keys, and the v1 endpoints `GET /api/v1/ads` (with cursor pagination), `GET /api/v1/ads/{id}` and `GET /api/v1/niches`. Setup instructions (`make up`) come with the Docker/Makefile step.
 
+The v1 API is described in [`api/openapi/v1.yaml`](api/openapi/v1.yaml) (OpenAPI 3.0). It is written by hand and kept true by tests:
+- Every v1 response the test suite receives is validated against it, and every request the API accepted must be valid by it too. A v1 request the document has no operation for must fail with a body in the `Error` schema.
+- `api/tests/Feature/V1/OpenApiTest.php` checks that it documents exactly the routes, search parameters, allowed values, limits and error codes the code has.
+- The same test checks that every response status it documents really happens.
+
 ## Assumptions
 
 Where the spec is ambiguous, this is what the code does and why.

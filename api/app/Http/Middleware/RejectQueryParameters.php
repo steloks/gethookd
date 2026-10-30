@@ -5,6 +5,7 @@ namespace App\Http\Middleware;
 use App\Search\QueryString;
 use App\Support\Errors\ApiError;
 use App\Support\Errors\ErrorCode;
+use App\Support\Errors\ParameterIssue;
 use App\Support\Errors\SafeText;
 use Closure;
 use Illuminate\Http\Request;
@@ -35,7 +36,7 @@ class RejectQueryParameters
             "Send instead: {$request->method()} {$path}",
             details: array_map(fn (string $name) => [
                 'param' => $name,
-                'issue' => 'unknown_parameter',
+                'issue' => ParameterIssue::UnknownParameter->value,
                 'message' => "\"{$name}\" is not a parameter of {$path}, which takes none.",
                 'allowed' => [],
             ], $shown),

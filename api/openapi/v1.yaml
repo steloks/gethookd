@@ -1,0 +1,458 @@
+openapi: 3.0.3
+info:
+  title: GetHookd ad search API
+  version: 1.0.0
+  description: |
+    Search a library of ads by keyword, niche, format, status and start date.
+
+    Kept true by tests: every v1 response a test receives through the v1() helper is validated
+    against this document (errors from undocumented paths and methods against the Error schema),
+    and tests/Feature/V1/OpenApiTest.php checks its routes, parameters, enums and error codes
+    against the code.
+
+    Every error, on every status, has the same shape (see the Error schema): a machine-readable
+    `code`, a `message`, a `next_step` saying what to do, and `retryable` saying whether sending
+    the same request again can help.
+servers:
+  - url: http://localhost:8000
+    description: Local development
+security:
+  - apiKey: []
+tags:
+  - name: ads
+  - name: niches
+
+paths:
+  /api/v1/ads:
+    get:
+      tags: [ads]
+      operationId: searchAds
+      summary: Search ads
+      description: |
+        Returns one page of ads matching every filter given (filters combine with AND).
+
+        Parameters are strict: an unknown parameter, a repeated parameter or an invalid value is a
+        422 that lists the allowed values and, where possible, the likely correction
+        (`did_you_mean`), with the corrected request in `next_step`. Nothing is ignored or
+        corrected silently. `applied_filters` in the response echoes the filters actually applied,
+        after normalisation.
+
+        Paging: pass `next_cursor` back as `cursor` until it is null. See the `cursor` parameter for
+        what a walk guarantees while new ads arrive.
+      parameters:
+        - name: q
+          in: query
+          description: |
+            Keyword or phrase, matched case-insensitively as a substring of the headline or the body
+            text. Leading and trailing spaces are trimmed; after trimming, q must have 1 to 200
+            characters.
+          schema:
+            type: string
+            minLength: 1
+          example: serum
+        - name: niche
+          in: query
+          description: |
+            One or more niche slugs, separated by commas (`skincare,haircare`); an ad in any of them
+            matches. Slugs must be exact. The slugs are `skincare`, `haircare`, `supplements`, `fitness`, `pet-supplies`, `home-decor`, `kitchen`, `apparel`, `jewelry`, `baby-kids`, `outdoor`, `tech-accessories`; GET /api/v1/niches lists them with their names.
+            Do not repeat the parameter or use `niche[]`.
+          schema:
+            type: string
+            minLength: 1
+          example: skincare,haircare
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [image, video, carousel]
+        - name: status
+          in: query
+          description: "`active` (still running) or `inactive` (stopped)."
+          schema:
+            type: string
+            enum: [active, inactive]
+        - name: started_after
+          in: query
+          description: Keeps ads that started running on or after this day (UTC). Format YYYY-MM-DD.
+          schema:
+            type: string
+            format: date
+          example: '2026-09-01'
+        - name: sort
+          in: query
+          description: |
+            `newest`: latest start_date first. `impressions`: by impression_rank, ads without
+            impression data last. impression_rank compares ads within one brand only (1 = that brand's most-shown ad). Results list every brand's rank-1 ads, then rank 2, and so on, with ads without impression data last. This is not a ranking of impressions across brands.
+            Ties are broken by id, highest first, in both orders.
+          schema:
+            type: string
+            enum: [newest, impressions]
+            default: newest
+        - name: limit
+          in: query
+          description: Ads per page. A value above the maximum is rejected, not clamped.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: cursor
+          in: query
+          description: |
+            The `next_cursor` of the previous page, exactly as returned. It remembers the search, so it
+            can be sent alone; sending it with different filters or sort is a 422 `cursor_mismatch`.
+            `limit` may change between pages.
+
+            A walk never returns an ad twice, and returns every ad that existed when page 1 was read
+            and still matches when its page is read. Ads added after page 1 do not appear; start a
+            new walk to see them.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 4096
+      responses:
+        '200':
+          description: One page of matching ads.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchPage'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '422':
+          $ref: '#/components/responses/InvalidParameters'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        default:
+          $ref: '#/components/responses/OtherError'
+
+  /api/v1/ads/{id}:
+    get:
+      tags: [ads]
+      operationId: getAd
+      summary: Get one ad
+      description: Every field of one ad. Takes no query parameters.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The `id` of an ad from a search result. An id that is not a positive whole number is a 404, like an id that does not exist.
+          schema:
+            type: string
+          example: '1042'
+      responses:
+        '200':
+          description: The ad.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Ad'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/InvalidParameters'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        default:
+          $ref: '#/components/responses/OtherError'
+
+  /api/v1/niches:
+    get:
+      tags: [niches]
+      operationId: listNiches
+      summary: List niches
+      description: The 12 niches, in a fixed order. `slug` is the value the search's `niche` filter takes. Takes no query parameters.
+      responses:
+        '200':
+          description: All niches.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Niche'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '422':
+          $ref: '#/components/responses/InvalidParameters'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        default:
+          $ref: '#/components/responses/OtherError'
+
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      description: |
+        An API key (`ghk_…`) as `Authorization: Bearer <key>`, with the `search:read` scope. The same
+        key works on v0 as the `api_key` query parameter; v1 does not read that parameter.
+
+  schemas:
+    Ad:
+      type: object
+      additionalProperties: false
+      required: [id, brand_id, brand_name, headline, body_text, niche, format, status, start_date, end_date, days_active, impression_rank, countries, discovered_at]
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        brand_id:
+          type: integer
+          minimum: 1
+        brand_name:
+          type: string
+        headline:
+          type: string
+        body_text:
+          type: string
+        niche:
+          type: string
+          description: Niche slug.
+          enum: [skincare, haircare, supplements, fitness, pet-supplies, home-decor, kitchen, apparel, jewelry, baby-kids, outdoor, tech-accessories]
+        format:
+          type: string
+          enum: [image, video, carousel]
+        status:
+          type: string
+          enum: [active, inactive]
+        start_date:
+          type: string
+          format: date
+          description: The day the ad started running (not the day it was found).
+        end_date:
+          type: string
+          format: date
+          nullable: true
+          description: The day the ad stopped. Null if and only if the ad is active.
+        days_active:
+          type: integer
+          minimum: 0
+          description: Whole days from start_date to today (UTC) for an active ad, or to end_date for an inactive one.
+        impression_rank:
+          type: integer
+          minimum: 1
+          nullable: true
+          description: The ad's position in its own brand's most-impressions list, 1 being the highest. Compares ads within one brand only. Null when there is no impression data.
+        countries:
+          type: array
+          description: ISO 3166-1 alpha-2 codes of the countries where the ad runs.
+          items:
+            type: string
+            pattern: '^[A-Z]{2}$'
+        discovered_at:
+          type: string
+          format: date-time
+          description: When ingest first saw the ad (UTC).
+
+    Niche:
+      type: object
+      additionalProperties: false
+      required: [slug, name, keywords]
+      properties:
+        slug:
+          type: string
+          enum: [skincare, haircare, supplements, fitness, pet-supplies, home-decor, kitchen, apparel, jewelry, baby-kids, outdoor, tech-accessories]
+        name:
+          type: string
+          example: Pet Supplies
+        keywords:
+          type: array
+          description: Words the ads in this niche use; useful as search terms.
+          items:
+            type: string
+
+    SearchPage:
+      type: object
+      additionalProperties: false
+      required: [data, applied_filters, sort, limit, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ad'
+        applied_filters:
+          type: object
+          additionalProperties: false
+          description: The filters that were applied, normalised (trimmed, duplicates removed, niches in catalog order). Filters not given are left out.
+          properties:
+            q:
+              type: string
+            niche:
+              type: array
+              items:
+                type: string
+                enum: [skincare, haircare, supplements, fitness, pet-supplies, home-decor, kitchen, apparel, jewelry, baby-kids, outdoor, tech-accessories]
+            format:
+              type: string
+              enum: [image, video, carousel]
+            status:
+              type: string
+              enum: [active, inactive]
+            started_after:
+              type: string
+              format: date
+        sort:
+          type: string
+          enum: [newest, impressions]
+        sort_note:
+          type: string
+          description: Present when the order is easy to misread (sort=impressions); says what it means.
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        next_cursor:
+          type: string
+          nullable: true
+          description: Send as `cursor` for the next page. Null on the last page.
+
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, next_step, retryable]
+          properties:
+            code:
+              type: string
+              enum: [bad_request, unauthenticated, insufficient_scope, not_found, method_not_allowed, invalid_parameters, rate_limited, internal_error, unavailable]
+            message:
+              type: string
+              description: What went wrong, for a person or a model.
+            next_step:
+              type: string
+              description: 'What to do about it. For a 422 where every problem has a likely fix, the corrected request ("Send instead: GET /api/v1/ads?…").'
+            retryable:
+              type: boolean
+              description: Whether sending the same request again, unchanged, can succeed.
+            retry_after:
+              type: integer
+              minimum: 1
+              description: Seconds to wait before retrying (also in the Retry-After header).
+            details:
+              type: array
+              description: One entry per problem with the request's parameters.
+              items:
+                $ref: '#/components/schemas/ParameterProblem'
+
+    ParameterProblem:
+      type: object
+      additionalProperties: false
+      required: [param, issue, message]
+      properties:
+        param:
+          type: string
+          description: The parameter as sent (shortened if long).
+        issue:
+          type: string
+          enum: [unknown_parameter, array_syntax, repeated_parameter, invalid_value, empty_value, out_of_range, too_long, cursor_mismatch]
+        message:
+          type: string
+        allowed:
+          type: array
+          description: The allowed parameter names or values.
+          items:
+            type: string
+        did_you_mean:
+          type: string
+          description: The likely intended parameter name or value.
+
+  responses:
+    Unauthenticated:
+      description: No API key, an invalid key, or a revoked key (`unauthenticated`). The message says which.
+      headers:
+        WWW-Authenticate:
+          required: true
+          schema:
+            type: string
+            enum: [Bearer]
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Error'
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [unauthenticated]
+    InsufficientScope:
+      description: The key lacks the `search:read` scope (`insufficient_scope`).
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Error'
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [insufficient_scope]
+    NotFound:
+      description: There is no ad with that id (`not_found`).
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Error'
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [not_found]
+    InvalidParameters:
+      description: Unknown, repeated or invalid query parameters (`invalid_parameters`), each listed in `details`.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Error'
+              - properties:
+                  error:
+                    required: [details]
+                    properties:
+                      code:
+                        enum: [invalid_parameters]
+                      details:
+                        minItems: 1
+    InternalError:
+      description: An unexpected failure on our side (`internal_error`, retryable).
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Error'
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [internal_error]
+    OtherError:
+      description: Any other error, in the same shape.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

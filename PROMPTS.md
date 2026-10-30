@@ -504,3 +504,55 @@ Log of the important prompts used during this assessment. Add an entry per task,
   - An ingest cycle waits on another connection holding the advisory lock (lock timeout).
 - Mutations: 20 run, 19 caught. The miss over-fetches unranked rows in the top-up; it is an equivalent mutant, because `run()` trims to `limit`, so pages are identical and only a few extra rows are read.
 - Full suite 311 passed; Pint clean. HTTP walk on the seeded DB with `ads:ingest --interval=100` running: newest 207 pages / 20,601 ads, impressions 209 pages / 20,879 ads, 0 duplicates, p50 about 50 ms per page.
+
+## 17. OpenAPI spec (Part 1, step 5)
+
+**Prompt:**
+> OK. now analize the requirement and continue with the OpenAI spec
+
+**Requirement (spec, Part 1):** "An OpenAPI spec that is kept true by generation or by a contract test. Write one test per filter that proves the filter changes the results." The per-filter tests already existed (`SearchTest`, "filters" block).
+
+**Decision:** written by hand, kept true by tests, not generated. A generator such as Scramble infers parameters from FormRequests, but v1 search parses the raw query string itself (strict parameters, comma-separated niche, cursor), so a generated spec would be wrong in exactly the places that matter to agents.
+
+**Result:**
+- `api/openapi/v1.yaml` (OpenAPI 3.0.3), with agent-oriented descriptions:
+  - Three operations: `searchAds`, `getAd`, `listNiches`.
+  - Strict schemas (`additionalProperties: false`, enums for niche/format/status/sort/error code/issue).
+  - Bearer security.
+  - Every status the API returns, plus `default` for the shared error shape.
+  - The impressions `sort_note` wording, and the cursor guarantees.
+- `tests/OpenApi.php`:
+  - Maps a URI to its documented operation and validates the response with `osteel/openapi-httpfoundation-testing` (dev dependency; uses `league/openapi-psr7-validator`).
+  - For 2xx responses it also validates the request, so the document can't be stricter than the API.
+- `v1()` in `tests/Pest.php` runs it on every response, so the existing ~190 v1 tests double as contract tests.
+- `tests/Feature/V1/OpenApiTest.php`:
+  - The document is valid OpenAPI.
+  - Routes, search parameters, enums, limits, `q`/cursor maximum lengths, niche slugs and error codes equal the code's.
+  - The impressions description contains `SearchSort::note()`.
+  - Every documented (operation, status) has a request that produces it and validates. The 500s are forced with a throwing model `retrieved` listener.
+
+**Verification:**
+- Mutations: 18 run, 18 caught.
+  - In the document: param removed, enum value missing, limit stricter, field renamed, `nullable` dropped, response removed, response added but never produced, path renamed, header changed, impressions wording changed.
+  - In the code: new route, new error code, new search param, `next_cursor` renamed, extra `applied_filters` key, lowercase countries, non-ISO `discovered_at`, new problem issue.
+- A spec stricter than the API (`limit` maximum 50) was not caught by the response checks alone, because no successful test sends a limit between 51 and 100. It is caught by the parameter parity test. Checked by hand: the request validator rejects `limit=150` and `format=gif`.
+- Full suite 334 passed; Pint clean.
+
+## 18. OpenAPI audit fixes
+
+**Prompt:** "@test-auditor check if the openapi spec is all good", then "yes go on, fix it" (agreed set: the auditor's M1–M4, plus the slug lists, parity checks and wording; `id` stays a string, and 429 waits for Part 3).
+
+**What changed:**
+- `tests/OpenApi.php`: a v1 request with no documented operation (unknown path, other method, test-only routes such as `__abort/429`) must be an error, must be JSON, and its body must match the `Error` schema. Before, these responses skipped validation, so `retry_after` was never checked against the spec.
+- `openapi/v1.yaml`:
+  - Each error response pins its `code` (401 → `unauthenticated`, and so on). A 422 requires at least one entry in `details`.
+  - `WWW-Authenticate` is a required header on 401.
+  - `q` no longer has a `maxLength`: the API counts after trimming, so the schema rejected padded values the API accepts. The limit is stated in the description.
+  - The `niche` parameter lists the 12 slugs; `applied_filters.niche` items are an enum of them.
+  - `info.description` now says exactly which responses are validated.
+- `App\Support\Errors\ParameterIssue` enum: the parser and `RejectQueryParameters` use it instead of string literals, so the spec's `issue` list can be compared with the code.
+- `OpenApiTest`: parity for the issue enum, the `applied_filters` keys (from a real parse), the applied niche enum, the slug list in the `niche` description, `q` length wording, and each error response's code against `ErrorCode::status()`. A dataset of broken responses (each next to a correct one that passes) proves the document rejects them.
+- `SearchTest`: `q` is measured after trimming (5 spaces + 200 characters is accepted; 201 is rejected).
+
+**Verification:**
+- Mutations: 18 run, 18 caught (helper checks removed, header optional, details optional or empty, codes unpinned or wrong, applied niche enum dropped, `q` maxLength restored, slug missing from description, issue undocumented, `retry_after` minimum 0; in the code: `q` counted before trimming, new issue, `applied_filters` key renamed, 404 status changed).

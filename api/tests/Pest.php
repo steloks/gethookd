@@ -6,6 +6,7 @@ use App\Support\Errors\ErrorCode;
 use App\Support\LocalUser;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Testing\TestResponse;
+use Tests\OpenApi;
 use Tests\TestCase;
 
 /*
@@ -58,7 +59,8 @@ function v1Key(array $scopes = [ApiScope::SearchRead]): string
 }
 
 /**
- * A v1 request with the key as a Bearer header, as a real client sends it.
+ * A v1 request with the key as a Bearer header, as a real client sends it. The response is checked
+ * against openapi/v1.yaml, so every test that calls v1 also tests the OpenAPI document.
  */
 function v1(string $method, string $uri, ?string $key = null): TestResponse
 {
@@ -66,7 +68,10 @@ function v1(string $method, string $uri, ?string $key = null): TestResponse
     app('auth')->forgetGuards();
     $headers = $key === null ? [] : ['Authorization' => "Bearer {$key}"];
 
-    return test()->json($method, $uri, [], $headers);
+    $response = test()->json($method, $uri, [], $headers);
+    OpenApi::assertMatches($response, $method, $uri, $headers);
+
+    return $response;
 }
 
 /**

@@ -361,6 +361,11 @@ describe('validation', function () {
         search('q='.str_repeat('a', 200))->assertOk();
     });
 
+    it('counts the length of q after trimming it', function () {
+        search('q='.str_repeat('%20', 5).str_repeat('a', 200).'%20')->assertOk();
+        expect(soleProblem(search('q=%20'.str_repeat('a', 201)))['issue'])->toBe('too_long');
+    });
+
     it('rejects a repeated niche instead of silently keeping the last one', function () {
         $response = search('niche=skincare&niche=haircare');
 

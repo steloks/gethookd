@@ -6,6 +6,7 @@ use App\Enums\AdFormat;
 use App\Enums\AdStatus;
 use App\Support\Errors\ApiError;
 use App\Support\Errors\ErrorCode;
+use App\Support\Errors\ParameterIssue;
 use App\Support\Errors\SafeText;
 use App\Support\NicheCatalog;
 use Carbon\CarbonImmutable;
@@ -91,7 +92,7 @@ final class SearchRequestParser
 
         foreach ($grouped as $name => $raw) {
             if (! self::isText($raw)) {
-                $this->problem($name, 'invalid_value', "{$name} is not valid UTF-8 text.");
+                $this->problem($name, ParameterIssue::InvalidValue, "{$name} is not valid UTF-8 text.");
                 $this->fixable = false;
 
                 continue;
@@ -139,7 +140,7 @@ final class SearchRequestParser
         $cursor = Cursor::decode($raw);
         if ($cursor === null) {
             // Not echoed: a cursor is long and means nothing to the caller.
-            $this->problem('cursor', 'invalid_value',
+            $this->problem('cursor', ParameterIssue::InvalidValue,
                 'cursor is not one this API issued, or it was changed. Send next_cursor exactly as a search response returned it, or leave cursor out to start again from the first page.');
             $this->fixable = false;
 
@@ -164,7 +165,7 @@ final class SearchRequestParser
         ));
 
         if ($differs !== []) {
-            $this->problem('cursor', 'cursor_mismatch',
+            $this->problem('cursor', ParameterIssue::CursorMismatch,
                 'cursor continues a search with a different '.implode(', ', $differs).'. '
                 .'Send the cursor alone (it remembers the search) or with the same parameters; to change the search, leave cursor out to start from the first page.');
             $this->fixable = false;
@@ -196,11 +197,11 @@ final class SearchRequestParser
 
             if (preg_match('/\A(\w+)\[[^\]]*\]\z/', $name, $match) && in_array($match[1], self::PARAMS, true)) {
                 $param = $match[1];
-                $this->problem($name, 'array_syntax', "Send {$param} as a plain parameter, not as {$this->show($name)}."
+                $this->problem($name, ParameterIssue::ArraySyntax, "Send {$param} as a plain parameter, not as {$this->show($name)}."
                     .($param === 'niche' ? ' For several niches, separate the slugs with commas.' : ''), didYouMean: $param);
             } elseif (! in_array($name, self::PARAMS, true)) {
                 $param = Suggest::closest($name, self::PARAMS, self::PARAM_ALIASES);
-                $this->problem($name, 'unknown_parameter', "{$this->show($name)} is not a search parameter.", self::PARAMS, $param);
+                $this->problem($name, ParameterIssue::UnknownParameter, "{$this->show($name)} is not a search parameter.", self::PARAMS, $param);
 
                 if ($param === null) {
                     $this->fixable = false;
@@ -220,13 +221,13 @@ final class SearchRequestParser
                     // Only suggest text that is valid; an encoding problem is reported on its own below.
                     $this->problem(
                         'niche',
-                        'repeated_parameter',
+                        ParameterIssue::RepeatedParameter,
                         'niche was sent more than once. Send one niche parameter with the slugs separated by commas.',
                         didYouMean: self::isText($grouped[$param]) ? implode(',', array_unique(self::listItems($grouped[$param]))) : null
                     );
                 }
             } elseif (count($raws) > 1) {
-                $this->problem($param, 'repeated_parameter', "{$param} was sent more than once. It takes a single value.");
+                $this->problem($param, ParameterIssue::RepeatedParameter, "{$param} was sent more than once. It takes a single value.");
                 $this->fixable = false;
             } else {
                 $grouped[$param] = $raws[0];
@@ -245,7 +246,7 @@ final class SearchRequestParser
         }
 
         if (mb_strlen($q) > self::MAX_Q_LENGTH) {
-            $this->problem('q', 'too_long', 'q is longer than '.self::MAX_Q_LENGTH.' characters. Search for a shorter phrase.');
+            $this->problem('q', ParameterIssue::TooLong, 'q is longer than '.self::MAX_Q_LENGTH.' characters. Search for a shorter phrase.');
             $this->fixable = false;
 
             return null;
@@ -280,7 +281,7 @@ final class SearchRequestParser
             $allFixed = ! in_array(null, $fixed, true);
             $this->problem(
                 'niche',
-                'invalid_value',
+                ParameterIssue::InvalidValue,
                 'Unknown niche '.self::firstFew($unknown).'. niche takes slugs such as "pet-supplies", separated by commas; GET /api/v1/niches lists them.',
                 $slugs,
                 $allFixed ? implode(',', array_unique($fixed)) : null
@@ -325,7 +326,7 @@ final class SearchRequestParser
         }
 
         $suggestion = Suggest::closest($raw, $allowed, $aliases);
-        $this->problem($name, 'invalid_value', "{$this->show($raw)} is not a valid {$name}.", $allowed, $suggestion);
+        $this->problem($name, ParameterIssue::InvalidValue, "{$this->show($raw)} is not a valid {$name}.", $allowed, $suggestion);
         $this->fixable = $this->fixable && $suggestion !== null;
 
         return null;
@@ -351,7 +352,7 @@ final class SearchRequestParser
 
         $this->problem(
             'started_after',
-            'invalid_value',
+            ParameterIssue::InvalidValue,
             "{$this->show($raw)} is not a date. started_after takes YYYY-MM-DD and keeps ads that started on or after that day (UTC). Today is {$today->toDateString()}.",
             didYouMean: $suggestion
         );
@@ -371,7 +372,7 @@ final class SearchRequestParser
         $tooBig = ctype_digit($raw) && (int) $raw > SearchParams::MAX_LIMIT;
         $this->problem(
             'limit',
-            $tooBig ? 'out_of_range' : 'invalid_value',
+            $tooBig ? ParameterIssue::OutOfRange : ParameterIssue::InvalidValue,
             'limit must be a whole number from 1 to '.SearchParams::MAX_LIMIT.'.',
             didYouMean: $tooBig ? (string) SearchParams::MAX_LIMIT : null
         );
@@ -417,7 +418,7 @@ final class SearchRequestParser
      */
     private function empty(string $name, string $hint): null
     {
-        $this->problem($name, 'empty_value', "{$name} is empty. {$hint}");
+        $this->problem($name, ParameterIssue::EmptyValue, "{$name} is empty. {$hint}");
 
         return null;
     }
@@ -425,15 +426,15 @@ final class SearchRequestParser
     /**
      * @param  list<string>|null  $allowed
      */
-    private function problem(string $param, string $issue, string $message, ?array $allowed = null, ?string $didYouMean = null): void
+    private function problem(string $param, ParameterIssue $issue, string $message, ?array $allowed = null, ?string $didYouMean = null): void
     {
-        $problem = ['param' => $this->show($param, quote: false), 'issue' => $issue, 'message' => $message];
+        $problem = ['param' => $this->show($param, quote: false), 'issue' => $issue->value, 'message' => $message];
         if ($allowed !== null) {
             $problem['allowed'] = $allowed;
         }
         if ($didYouMean !== null) {
             $problem['did_you_mean'] = $didYouMean;
-            if (in_array($param, self::PARAMS, true) && $issue !== 'array_syntax') {
+            if (in_array($param, self::PARAMS, true) && $issue !== ParameterIssue::ArraySyntax) {
                 $this->corrected[$param] = $didYouMean;
             }
         }
