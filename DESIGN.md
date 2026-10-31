@@ -15,3 +15,12 @@ The rule is written in the README ("Billing"). The decisions behind it:
 ## Rate limit
 
 Fixed windows of one clock minute, one Redis counter per key; see the README ("Rate limit") for the trade-off against a sliding-window log or token bucket.
+
+## MCP server
+
+- **Thin client of v1, over HTTP.** The MCP server never touches the database and holds no key: each tool call is a v1 request with the caller's own `Authorization` header. Auth, scopes, revocation, the rate limit, billing and the quota are therefore v1's, with nothing to keep in sync. The cost is one extra hop per call.
+- **The key is read from every request, never stored with the session,** so revoking a key (or swapping it in the client config) applies to the next tool call.
+- **No argument checks in the MCP server.** Tool schemas are hand-written JSON Schema, not SDK/zod validation: the SDK would silently strip an unknown argument (`nich`), which is exactly v0's bug. Arguments go to v1 as sent; v1's 422 (with `did_you_mean`) becomes `corrected_arguments`. Allowed values are listed in the descriptions, and a test checks them against the Laravel enums and niche catalog, so the descriptions can't drift from what v1 accepts.
+- **Response size is a budget, not a hope.** Results are cut and measured after JSON encoding (quotes and emoji make the encoded text longer), with fallbacks that cut further, so a page has a hard upper bound. `limit` is capped at 25 in the tool even though v1 allows 100: the only argument the MCP server checks, because it is the tool's own budget.
+- **`impression_rank` is renamed `impression_rank_in_brand`** in tool output, and the descriptions say it does not compare brands. A model reading `impression_rank: 1` would otherwise call that ad the most-seen overall. ("Which pet supplies brand gets the most impressions?" can't be answered from this data, and the tools say so.)
+- **Retries:** one retry on timeout, dropped connection or 5xx, with the call's `Idempotency-Key` (sha256 of session id, JSON-RPC id, tool and arguments), so a lost answer is not billed twice. This is proved end to end: a proxy drops Laravel's first answer, and exactly one billing row is written.

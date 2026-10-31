@@ -658,3 +658,30 @@ Log of the important prompts used during this assessment. Add an entry per task,
   - With no read timeout, the request hung for 60 s.
   - A guard that trusts the config let `/0` through.
 - Full suite passed; Pint clean.
+
+## 23. MCP server (Part 2)
+
+**Prompt:** "I think we are ready for the mcp server, show me your plan", then "ok. implement the mcp server by the requirements".
+
+**What was built (`mcp/`):**
+- Node 22 + TypeScript, `@modelcontextprotocol/sdk` 1.32 low-level `Server` over Streamable HTTP, at `/mcp`.
+- Tools: `list_niches`, `search_ads`, `get_ad`, with hand-written JSON Schemas.
+- `v1Client.ts`: forwards the caller's Authorization header, sends `X-Client: mcp` and the call's `Idempotency-Key`, and retries once on timeout, dropped connection or 5xx.
+- `errors.ts`: v1 codes passed through; `next_step` reworded for tool calls; `corrected_arguments` from v1's `did_you_mean`.
+- `budget.ts`: 600 characters per search result, 20,000 per page, 3,500 for `get_ad`, measured after JSON encoding.
+- Sessions with DNS-rebinding protection, an idle timeout, a session cap and a 1 MB body cap.
+
+**Decisions made while implementing:**
+- SDK/zod input validation was not used: it strips unknown arguments silently (v0's bug). Arguments are forwarded as sent, and v1 rejects them.
+- The search_ads draft said a brand's ads could be found by putting the brand name in `q`. That was false (`q` searches copy only), so the description now says there is no brand filter.
+- A 200 that is not JSON is retried once, with the same key (the test first expected no retry; the behaviour was kept and the test fixed).
+
+**Verification:**
+- Vitest: 87 unit tests against a fake v1 through a real MCP client over HTTP. Descriptions are checked against the Laravel enums, niche catalog, search parameters and error-code registry.
+- End to end (`npm run test:e2e`, 5 tests): the real Laravel API on the test database behind a proxy.
+  - A revoked key fails on the next MCP call in the same session.
+  - 59 REST calls plus 1 MCP call, then the next MCP call is `rate_limited` with the wait in seconds.
+  - MCP calls are billed with `client = mcp`, and `list_niches` is not billed.
+  - A dropped first answer is retried and billed once.
+- Mutations: 33 run against the unit tests, 33 caught; 3 run against the end-to-end tests (new key per retry, no `X-Client`, key read once per session), 3 caught.
+- Not yet done: Docker service and `make` targets (with the Docker/Makefile step), and the real-model eval (needs a run in Claude Code).
