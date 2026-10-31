@@ -52,15 +52,25 @@ describe('every tool call becomes a v1 request with the caller\'s key', () => {
     expect(h.v1.requests.map((r) => r.headers.authorization)).toEqual(['Bearer ghk_first', 'Bearer ghk_second']);
   });
 
-  it('sends no key of its own when the caller sent none, so v1 answers unauthenticated', async () => {
+  it('sends no key of its own when a call comes without one, so v1 answers unauthenticated', async () => {
     h.v1.reply((_req, res) => json(res, 401, { error: { code: 'unauthenticated', message: 'The API key is missing, invalid or revoked.', next_step: 'x', retryable: false } }));
-    const client = await h.connect({});
+    const client = await h.connect();
+    const sessionId = (client.transport as { sessionId?: string }).sessionId!;
 
-    const result = await client.callTool({ name: 'search_ads', arguments: {} });
+    const res = await fetch(h.mcpUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'Mcp-Session-Id': sessionId, 'Mcp-Protocol-Version': '2025-06-18' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'search_ads', arguments: {} } }),
+    });
+    const text = await res.text();
 
     expect(h.v1.requests[0]!.headers.authorization).toBeUndefined();
-    expect(result.isError).toBe(true);
-    expect(payload(result).error.code).toBe('unauthenticated');
+    expect(text).toContain('unauthenticated');
+  });
+
+  it('refuses to connect without a key, before any call reaches v1', async () => {
+    await expect(h.connect({})).rejects.toThrow();
+    expect(h.v1.requests).toHaveLength(0);
   });
 });
 
@@ -98,6 +108,25 @@ describe('arguments are sent to v1 as they are, for v1 to check', () => {
     ]);
   });
 
+  it('sends a null argument as an empty value for v1 to reject, instead of dropping it', async () => {
+    const client = await h.connect();
+
+    await client.callTool({ name: 'search_ads', arguments: { format: null, q: 'tent' } });
+
+    expect(h.v1.requests[0]!.url).toBe('/api/v1/ads?format=&q=tent&limit=10');
+  });
+
+  it('does not follow a redirect with the caller\'s key', async () => {
+    const redirect = (_req: unknown, res: import('node:http').ServerResponse) => res.writeHead(302, { Location: '/api/v1/niches' }).end();
+    h.v1.reply(redirect, redirect);
+    const client = await h.connect();
+
+    const result = await client.callTool({ name: 'search_ads', arguments: {} });
+
+    expect(h.v1.requests.every((r) => r.path === '/api/v1/ads')).toBe(true);
+    expect(payload(result).error.code).toBe('upstream_invalid_response');
+  });
+
   it('does not normalise values: a display name goes to v1 as sent', async () => {
     const client = await h.connect();
 
@@ -107,7 +136,7 @@ describe('arguments are sent to v1 as they are, for v1 to check', () => {
     expect(h.v1.requests[0]!.query.get('format')).toBe('VIDEO');
   });
 
-  it('asks for 10 results when no limit is given, and passes the cursor through untouched', async () => {
+  it('asks for 10 results on a new search without limit, leaves the page size to the cursor, and passes the cursor through untouched', async () => {
     const client = await h.connect();
 
     await client.callTool({ name: 'search_ads', arguments: {} });
@@ -116,7 +145,7 @@ describe('arguments are sent to v1 as they are, for v1 to check', () => {
 
     expect(h.v1.requests.map((r) => Object.fromEntries(r.query))).toEqual([
       { limit: '10' },
-      { cursor: 'eyJ.abc-_', limit: '10' },
+      { cursor: 'eyJ.abc-_' },
       { cursor: 'eyJ.abc-_', limit: '3' },
     ]);
   });

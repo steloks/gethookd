@@ -14,6 +14,7 @@ import { getAd } from './tools/getAd.js';
 import { listNiches } from './tools/listNiches.js';
 import { searchAds } from './tools/searchAds.js';
 import type { ToolDefinition } from './tools/tool.js';
+import { errorResult } from './errors.js';
 import type { V1Client } from './v1Client.js';
 
 export const TOOLS: ToolDefinition[] = [listNiches, searchAds, getAd];
@@ -46,8 +47,12 @@ export function createMcpServer(options: McpOptions): Server {
     { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
   );
 
+  const today = () => (options.now?.() ?? new Date()).toISOString().slice(0, 10);
+
+  // Descriptions carry today's date, so a model can turn "last 30 days" into started_after
+  // before its first call. They are built per tools/list, not at startup.
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOLS.map(({ run: _run, ...tool }) => tool),
+    tools: TOOLS.map(({ run: _run, ...tool }) => JSON.parse(JSON.stringify(tool).replaceAll('{{today}}', today()))),
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
@@ -59,12 +64,22 @@ export function createMcpServer(options: McpOptions): Server {
     const args = request.params.arguments ?? {};
     const authorization = header(extra.requestInfo?.headers.authorization);
 
-    return tool.run(args, {
-      v1: options.v1,
-      idempotencyKey: idempotencyKey(extra.sessionId, extra.requestId, tool.name, args),
-      today: (options.now?.() ?? new Date()).toISOString().slice(0, 10),
-      ...(authorization === undefined ? {} : { authorization }),
-    });
+    try {
+      return await tool.run(args, {
+        v1: options.v1,
+        idempotencyKey: idempotencyKey(extra.sessionId, extra.requestId, tool.name, args),
+        today: today(),
+        ...(authorization === undefined ? {} : { authorization }),
+      });
+    } catch (error) {
+      logFailure(`${tool.name} failed`, error);
+      return errorResult({
+        code: 'mcp_internal_error',
+        message: 'This MCP server failed while handling the call.',
+        next_step: `Call ${tool.name} again in a few seconds. If it keeps failing, tell the user the GetHookd MCP server has a problem.`,
+        retryable: true,
+      });
+    }
   });
 
   return server;
@@ -72,6 +87,15 @@ export function createMcpServer(options: McpOptions): Server {
 
 function header(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+/**
+ * Logs a failure as its class and message only: never request headers or bodies, and anything
+ * that looks like an API key is redacted.
+ */
+export function logFailure(context: string, error: unknown): void {
+  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  console.error(`[mcp] ${context}: ${text.replace(/ghk(?:_|%5f)[A-Za-z0-9]*/gi, 'ghk_[redacted]').slice(0, 500)}`);
 }
 
 export interface HttpOptions extends McpOptions {
@@ -88,14 +112,21 @@ const MAX_BODY_BYTES = 1_000_000;
 interface Session {
   transport: StreamableHTTPServerTransport;
   lastSeen: number;
+  /** Open GET (SSE) streams; a session that is listening is not idle. */
+  streams: number;
 }
+
+export type McpHttpServer = HttpServer & {
+  /** Ends every session and its open streams, so close() does not wait on them. */
+  closeSessions(): Promise<void>;
+};
 
 /**
  * The Streamable HTTP endpoint at /mcp (plus /healthz). Each session has its own MCP server;
  * the API key is read from every request, never stored with the session, so a revoked key
  * fails on the very next call.
  */
-export function createHttpServer(options: HttpOptions): HttpServer {
+export function createHttpServer(options: HttpOptions): McpHttpServer {
   const sessions = new Map<string, Session>();
   const idleMs = options.sessionIdleMs ?? 30 * 60_000;
   const maxSessions = options.maxSessions ?? 1_000;
@@ -103,7 +134,7 @@ export function createHttpServer(options: HttpOptions): HttpServer {
   const sweep = setInterval(() => {
     const cutoff = Date.now() - idleMs;
     for (const [id, session] of sessions) {
-      if (session.lastSeen < cutoff) {
+      if (session.streams === 0 && session.lastSeen < cutoff) {
         sessions.delete(id);
         void session.transport.close();
       }
@@ -111,8 +142,15 @@ export function createHttpServer(options: HttpOptions): HttpServer {
   }, Math.min(idleMs, 60_000));
   sweep.unref();
 
+  const closeSessions = async () => {
+    const open = [...sessions.values()];
+    sessions.clear();
+    await Promise.all(open.map((session) => session.transport.close()));
+  };
+
   const http = createServer((req, res) => {
-    handle(req, res).catch(() => {
+    handle(req, res).catch((error) => {
+      logFailure(`${req.method} ${new URL(req.url ?? '/', 'http://localhost').pathname}`, error);
       if (!res.headersSent) {
         jsonRpcError(res, 500, ErrorCode.InternalError, 'Internal server error.');
       } else {
@@ -122,10 +160,7 @@ export function createHttpServer(options: HttpOptions): HttpServer {
   });
   http.on('close', () => {
     clearInterval(sweep);
-    for (const session of sessions.values()) {
-      void session.transport.close();
-    }
-    sessions.clear();
+    void closeSessions();
   });
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -163,9 +198,13 @@ export function createHttpServer(options: HttpOptions): HttpServer {
         jsonRpcError(res, 400, ErrorCode.InvalidRequest, 'No session. Send initialize first, then send its Mcp-Session-Id header.');
         return;
       }
-      if (sessions.size >= maxSessions) {
-        jsonRpcError(res, 503, ErrorCode.InternalError, 'Too many open sessions. Try again later.');
+      // Only callers with a key may open sessions (v1 checks the key itself on every tool call).
+      if (!/^Bearer \S+$/i.test(header(req.headers.authorization) ?? '')) {
+        jsonRpcError(res, 401, -32001, 'Send your GetHookd API key as "Authorization: Bearer <key>" in the MCP client config.');
         return;
+      }
+      if (sessions.size >= maxSessions) {
+        evictOldest();
       }
 
       const transport = new StreamableHTTPServerTransport({
@@ -173,7 +212,7 @@ export function createHttpServer(options: HttpOptions): HttpServer {
         enableDnsRebindingProtection: true,
         allowedHosts: options.allowedHosts,
         onsessioninitialized: (id) => {
-          sessions.set(id, { transport, lastSeen: Date.now() });
+          sessions.set(id, { transport, lastSeen: Date.now(), streams: 0 });
         },
       });
       transport.onclose = () => {
@@ -192,6 +231,14 @@ export function createHttpServer(options: HttpOptions): HttpServer {
         return;
       }
       existing.lastSeen = Date.now();
+      if (req.method === 'GET') {
+        const session = existing;
+        session.streams++;
+        res.on('close', () => {
+          session.streams--;
+          session.lastSeen = Date.now();
+        });
+      }
       await existing.transport.handleRequest(req, res);
       return;
     }
@@ -200,7 +247,21 @@ export function createHttpServer(options: HttpOptions): HttpServer {
     jsonRpcError(res, 405, ErrorCode.InvalidRequest, 'Method not allowed.');
   }
 
-  return http;
+  /** Makes room for a new session by closing the one unused for longest. */
+  function evictOldest(): void {
+    let oldest: [string, Session] | undefined;
+    for (const entry of sessions) {
+      if (oldest === undefined || entry[1].lastSeen < oldest[1].lastSeen) {
+        oldest = entry;
+      }
+    }
+    if (oldest !== undefined) {
+      sessions.delete(oldest[0]);
+      void oldest[1].transport.close();
+    }
+  }
+
+  return Object.assign(http, { closeSessions });
 }
 
 /** The parsed JSON body, or undefined after answering with an error. */

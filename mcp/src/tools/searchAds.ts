@@ -13,7 +13,7 @@ Do not use it for:
 - exact totals: no counts are returned; page with the cursor if you must count, and say the number is what you saw.
 - ranking brands against each other: impression data only ranks ads WITHIN one brand (impression_rank_in_brand 1 = that brand's most-seen ad). It says nothing about which brand gets more impressions, and there is no spend, reach or click data. Say so instead of guessing.
 
-All arguments are optional and combine with AND. Unknown argument names and invalid values are rejected with the allowed values and corrected_arguments, never ignored.`,
+All arguments are optional and combine with AND. Unknown argument names and invalid values are rejected, never ignored: the error lists the allowed values and, when the fix is certain, corrected_arguments. Today is {{today}} (UTC).`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -32,7 +32,7 @@ All arguments are optional and combine with AND. Unknown argument names and inva
       started_after: {
         type: 'string',
         description:
-          'YYYY-MM-DD (UTC). Keeps ads that started running on or after this day. For "the last 30 days" use today minus 30 days; today is in every response from this server (`today`).',
+          'YYYY-MM-DD (UTC). Keeps ads that started running on or after this day. For "the last 30 days" use today minus 30 days. Today is {{today}} (UTC); every response from this server also has `today`.',
       },
       sort: {
         type: 'string',
@@ -65,24 +65,27 @@ All arguments are optional and combine with AND. Unknown argument names and inva
     }
 
     const query = toQuery(args);
-    if (!('limit' in args)) {
+    // A cursor remembers its page size; only a new search gets the default.
+    if (!('limit' in args) && !('cursor' in args)) {
       query.set('limit', String(DEFAULT_LIMIT));
     }
 
     return callV1('search_ads', args, context, { path: '/api/v1/ads', query }, ({ body }) => {
-      const page = body as { data?: unknown; applied_filters?: unknown; sort?: unknown; sort_note?: unknown; next_cursor?: unknown };
+      const page = body as { data?: unknown; applied_filters?: unknown; sort?: unknown; sort_note?: unknown; limit?: unknown; next_cursor?: unknown };
       if (!Array.isArray(page?.data)) {
         return null;
       }
 
       const results = (page.data as V1Ad[]).map(compactAd);
       const nextCursor = typeof page.next_cursor === 'string' ? page.next_cursor : null;
+      const limit = typeof page.limit === 'number' ? page.limit : undefined;
 
       return textResult({
         today: context.today,
         applied_filters: page.applied_filters,
         sort: page.sort,
         ...(page.sort_note === undefined ? {} : { sort_note: page.sort_note }),
+        ...(limit === undefined ? {} : { limit }),
         count: results.length,
         results,
         next_cursor: nextCursor,
@@ -91,7 +94,7 @@ All arguments are optional and combine with AND. Unknown argument names and inva
             ? 'No ads match. Try fewer filters, a broader keyword, or an earlier started_after.'
             : (nextCursor === null
                 ? 'This is the last page.'
-                : 'More results: call search_ads with {"cursor": next_cursor} (it remembers the search).') +
+                : `More results: call search_ads with {"cursor": next_cursor} (it remembers the search${limit === undefined ? '' : ` and the page size of ${limit}`}).`) +
               ' Call get_ad with an id for the full body text and countries.',
       });
     });

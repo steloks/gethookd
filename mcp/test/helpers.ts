@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { V1Ad } from '../src/budget.js';
-import { createHttpServer } from '../src/server.js';
+import { createHttpServer, type HttpOptions, type McpHttpServer } from '../src/server.js';
 import { createV1Client, type V1ClientOptions } from '../src/v1Client.js';
 
 export interface SeenRequest {
@@ -98,18 +98,20 @@ function defaultBody(req: SeenRequest): unknown {
 export interface Harness {
   v1: FakeV1;
   mcpUrl: string;
+  http: McpHttpServer;
   connect(headers?: Record<string, string>): Promise<Client>;
   stop(): Promise<void>;
 }
 
 /** The real HTTP MCP server in front of a fake v1, and a way to connect real MCP clients to it. */
-export async function startHarness(v1 = new FakeV1(), clientOptions: Partial<V1ClientOptions> = {}): Promise<Harness> {
+export async function startHarness(v1 = new FakeV1(), clientOptions: Partial<V1ClientOptions> = {}, httpOptions: Partial<HttpOptions> = {}): Promise<Harness> {
   await v1.start();
   const allowedHosts: string[] = [];
   const http = createHttpServer({
     v1: createV1Client({ baseUrl: v1.url, timeoutMs: 2_000, retryDelayMs: 10, ...clientOptions }),
     allowedHosts,
     now: () => new Date('2026-10-31T12:00:00Z'),
+    ...httpOptions,
   });
   http.listen(0, '127.0.0.1');
   await once(http, 'listening');
@@ -122,6 +124,7 @@ export async function startHarness(v1 = new FakeV1(), clientOptions: Partial<V1C
   return {
     v1,
     mcpUrl,
+    http,
     async connect(headers = { Authorization: 'Bearer ghk_test_key' }) {
       const client = new Client({ name: 'test', version: '1.0.0' });
       await client.connect(new StreamableHTTPClientTransport(new URL(mcpUrl), { requestInit: { headers } }));

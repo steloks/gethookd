@@ -28,10 +28,11 @@ export function textResult(value: unknown): CallToolResult {
 export function toQuery(args: Record<string, unknown>, skip: string[] = []): URLSearchParams {
   const query = new URLSearchParams();
   for (const [name, value] of Object.entries(args)) {
-    if (value === undefined || value === null || skip.includes(name)) {
+    if (value === undefined || skip.includes(name)) {
       continue;
     }
-    query.append(name, Array.isArray(value) ? value.map(scalar).join(',') : scalar(value));
+    // null is sent as an empty value, which v1 rejects ("leave it out"), rather than dropped here.
+    query.append(name, value === null ? '' : Array.isArray(value) ? value.map(scalar).join(',') : scalar(value));
   }
 
   return query;

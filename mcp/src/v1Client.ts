@@ -71,7 +71,8 @@ export function createV1Client(options: V1ClientOptions): V1Client {
       }
 
       try {
-        const response = await doFetch(url, { headers, signal: AbortSignal.timeout(options.timeoutMs) });
+        // Never follow a redirect: it would carry the caller's key somewhere v1 did not answer from.
+        const response = await doFetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(options.timeoutMs) });
         const result = await read(response);
         if (!RETRY_STATUSES.has(result.status)) {
           return result;
@@ -97,6 +98,9 @@ export function createV1Client(options: V1ClientOptions): V1Client {
 }
 
 async function read(response: Response): Promise<V1Response> {
+  if (response.status >= 300 && response.status <= 399) {
+    throw new UpstreamError('bad_response', `The GetHookd API answered with a redirect (HTTP ${response.status}), which this server does not follow.`);
+  }
   const text = await response.text();
   let body: unknown;
   try {

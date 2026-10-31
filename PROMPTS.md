@@ -685,3 +685,24 @@ Log of the important prompts used during this assessment. Add an entry per task,
   - A dropped first answer is retried and billed once.
 - Mutations: 33 run against the unit tests, 33 caught; 3 run against the end-to-end tests (new key per retry, no `X-Client`, key read once per session), 3 caught.
 - Not yet done: Docker service and `make` targets (with the Docker/Makefile step), and the real-model eval (needs a run in Claude Code).
+
+## 24. Fixes from the MCP audit
+
+**Prompt:** "@mcp-auditor make full investigation of the mcp server make sure it meets the requirements in claude.md and the task", then "fix the issues from mcp auditor".
+
+**What changed (`mcp/`):**
+- Today's UTC date is in the `search_ads` description, filled in on each tools/list, so "last 30 days" works before the first call.
+- `initialize` needs an `Authorization: Bearer` header. When 1,000 sessions are open, the one unused for longest is closed instead of answering 503.
+- A cursor keeps its page size: the default `limit=10` is only added to a new search. The response echoes `limit`, and `next_step` names the page size.
+- Description wording: `corrected_arguments` only "when the fix is certain". A `null` argument is sent as empty for v1 to reject, not dropped.
+- `get_ad` with an argument it doesn't take gets `corrected_arguments` without it.
+- The `get_ad` budget (3,500) now covers the whole response, not just the ad.
+- Shutdown closes sessions and streams first. A session with an open stream is not swept as idle.
+- fetch never follows redirects (the caller's key would follow them).
+- Unexpected failures become `mcp_internal_error` (retryable) and are logged as class and message only, with key-like text redacted.
+- The two local checks (`limit` > 25, a bad `get_ad` id) are kept and written into CLAUDE.md as exceptions to "never validates".
+
+**Verification:**
+- Vitest 99 passed.
+- Mutations: 15 new ones run, 14 caught at first. "get_ad envelope ignored" was missed because the worst-case fixture was far below the budget. A test now sweeps body sizes around the limit, and the mutation is caught.
+- The original 33 mutations were rerun, and all are still caught.

@@ -20,5 +20,10 @@ server.listen(port, host, () => {
 });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, () => server.close(() => process.exit(0)));
+  process.on(signal, async () => {
+    // Open SSE streams would keep close() waiting; end the sessions first.
+    await server.closeSessions();
+    server.close(() => process.exit(0));
+    server.closeAllConnections();
+  });
 }

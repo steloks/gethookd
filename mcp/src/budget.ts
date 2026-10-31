@@ -6,13 +6,15 @@
  *   (with "…") so ads with long copy cost no more than short ones.
  * - One search page: at most MAX_LIMIT results, so at most PAGE_BUDGET characters with the
  *   echoed filters and cursor.
- * - get_ad: at most AD_BUDGET characters (body text up to 2,000).
+ * - get_ad: at most AD_BUDGET characters for the whole response (body text up to 2,000).
  */
 export const RESULT_BUDGET = 600;
 export const DEFAULT_LIMIT = 10;
 export const MAX_LIMIT = 25;
 export const PAGE_BUDGET = 20_000;
 export const AD_BUDGET = 3_500;
+/** What get_ad puts around the ad: {"today":"YYYY-MM-DD","ad":…}. */
+const AD_ENVELOPE = 64;
 
 /** One ad as v1 returns it. */
 export interface V1Ad {
@@ -102,7 +104,7 @@ export function fullAd(ad: V1Ad): Record<string, unknown> {
       countries: (Array.isArray(ad.countries) ? ad.countries : []).slice(0, 60).map((c) => clip(c, 2)),
       discovered_at: ad.discovered_at,
     };
-    if (JSON.stringify(result).length <= AD_BUDGET) {
+    if (JSON.stringify(result).length <= AD_BUDGET - AD_ENVELOPE) {
       break;
     }
   }

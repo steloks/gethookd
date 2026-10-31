@@ -51,8 +51,15 @@ describe('per-result budget', () => {
     expect(Array.from(compactAd(ad({ body_text: 'b'.repeat(1_000) })).body as string)).toHaveLength(160);
   });
 
-  it(`keeps get_ad within ${AD_BUDGET} characters, and keeps up to 2,000 characters of body`, () => {
-    expect(JSON.stringify(fullAd(worstAd(1))).length).toBeLessThanOrEqual(AD_BUDGET);
+  it(`keeps the whole get_ad response within ${AD_BUDGET} characters, also for ads right at the limit`, () => {
+    // Quotes double when encoded, so these bodies land on every size around the budget.
+    for (let n = 1_000; n <= 2_000; n++) {
+      const response = JSON.stringify({ today: '2026-10-31', ad: fullAd(ad({ body_text: '"'.repeat(n) })) });
+      expect(response.length).toBeLessThanOrEqual(AD_BUDGET);
+    }
+  });
+
+  it('keeps up to 2,000 characters of body in get_ad', () => {
     expect(fullAd(ad({ body_text: 'b'.repeat(2_000) })).body).toBe('b'.repeat(2_000));
     expect(Array.from(fullAd(ad({ body_text: 'b'.repeat(9_000) })).body as string)).toHaveLength(2_000);
   });
@@ -95,7 +102,6 @@ describe('whole responses', () => {
 
     const result = await client.callTool({ name: 'get_ad', arguments: { id: 1 } });
 
-    // The tool adds "today" around the ad.
-    expect((result.content as Array<{ text: string }>)[0]!.text.length).toBeLessThanOrEqual(AD_BUDGET + 40);
+    expect((result.content as Array<{ text: string }>)[0]!.text.length).toBeLessThanOrEqual(AD_BUDGET);
   });
 });

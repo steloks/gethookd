@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ad, json, payload, startHarness, type Harness } from './helpers.js';
 import { formats, nicheSlugs, searchParams, sorts, statuses } from './laravel.js';
 
@@ -54,6 +54,28 @@ describe('tool list', () => {
     }
   });
 
+  it('puts today\'s date in the search_ads description, so "last 30 days" works before the first call', async () => {
+    const tool = (await tools()).search_ads!;
+
+    expect(tool.description).toContain('Today is 2026-10-31 (UTC)');
+    expect((tool.inputSchema.properties as Record<string, { description: string }>).started_after!.description).toContain('Today is 2026-10-31 (UTC)');
+    expect(JSON.stringify(tool)).not.toContain('{{today}}');
+  });
+
+  it('turns an unexpected failure into mcp_internal_error and logs it without the key', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    h.v1.reply((_req, res) => json(res, 200, { data: [null], applied_filters: {}, sort: 'newest', limit: 10, next_cursor: null }));
+    const client = await h.connect({ Authorization: 'Bearer ghk_never_in_logs' });
+
+    const result = await client.callTool({ name: 'search_ads', arguments: {} });
+
+    expect(payload(result).error).toMatchObject({ code: 'mcp_internal_error', retryable: true });
+    expect(log).toHaveBeenCalled();
+    expect(JSON.stringify(log.mock.calls)).toContain('search_ads failed');
+    expect(JSON.stringify(log.mock.calls)).not.toContain('ghk_never_in_logs');
+    log.mockRestore();
+  });
+
   it('is honest that impressions only rank ads within one brand', async () => {
     const list = await tools();
 
@@ -79,7 +101,7 @@ describe('search_ads output', () => {
         applied_filters: { niche: ['skincare'] },
         sort: 'impressions',
         sort_note: 'Within-brand rank.',
-        limit: 10,
+        limit: 5,
         next_cursor: 'CURSOR',
       }),
     );
@@ -92,6 +114,7 @@ describe('search_ads output', () => {
       applied_filters: { niche: ['skincare'] },
       sort: 'impressions',
       sort_note: 'Within-brand rank.',
+      limit: 5,
       count: 1,
       results: [
         {
@@ -109,7 +132,7 @@ describe('search_ads output', () => {
         },
       ],
       next_cursor: 'CURSOR',
-      next_step: expect.stringContaining('{"cursor": next_cursor}'),
+      next_step: expect.stringContaining('{"cursor": next_cursor} (it remembers the search and the page size of 5)'),
     });
   });
 

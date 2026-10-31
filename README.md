@@ -97,6 +97,8 @@ A Node 22 / TypeScript MCP server over Streamable HTTP at `http://localhost:3001
 - **Every tool call is one GET to v1, carrying the caller's own `Authorization: Bearer` header,** read from each HTTP request (not stored with the MCP session). It also sends `X-Client: mcp` and an `Idempotency-Key`. So auth, scopes, revocation (on the very next call), the rate limit, billing and the quota are exactly REST's.
 - It has no database, no key of its own and no cache, and it doesn't validate arguments. Every argument is sent to v1 under the name the model used, so a misspelled one (`nich`) is rejected by v1 with a suggestion instead of being dropped.
 - **Two exceptions** that never reach v1: `search_ads` `limit` above 25 (this tool's size budget; v1 allows 100), and a `get_ad` id that is missing or would be read as `.`/`..` in a URL path.
+- A `null` argument is sent as an empty value, which v1 rejects ("leave it out"); it is not dropped.
+- The tool list carries today's UTC date (in the `search_ads` description), so a model can turn "the last 30 days" into `started_after` before its first call. Every response also has `today`.
 
 **Run it locally:** `php artisan serve` in `api/`, then `cd mcp && npm install && npm start`. Settings, all optional: `MCP_PORT` (3001), `MCP_HOST` (127.0.0.1), `V1_BASE_URL` (http://127.0.0.1:8000), `V1_TIMEOUT_MS` (10000), `MCP_ALLOWED_HOSTS` (localhost and 127.0.0.1 on the port).
 
@@ -107,8 +109,8 @@ claude mcp add --transport http gethookd http://localhost:3001/mcp --header "Aut
 
 **Size budget** (characters of the JSON a tool returns, about 4 per token; enforced by `mcp/test/budget.test.ts` with worst-case copy):
 - `search_ads`: one result is at most 600 characters (about 150 tokens). That covers id, brand, headline (120 chars), body (160 chars), niche, format, status, dates, days_active and `impression_rank_in_brand`. If quotes or emoji would push a result over, the copy is cut further. A page is 10 results by default and 25 at most, so at most 20,000 characters including the echoed filters and cursor.
-- **More:** `next_cursor` (send `{"cursor": …}` alone for the next page), or `get_ad` for one ad in full.
-- `get_ad`: at most 3,500 characters, with up to 2,000 characters of body text, plus countries, brand_id and discovered_at.
+- **More:** `next_cursor` (send `{"cursor": …}` alone for the next page; the cursor keeps the page size, and the response says which), or `get_ad` for one ad in full.
+- `get_ad`: at most 3,500 characters for the whole response, with up to 2,000 characters of body text, plus countries, brand_id and discovered_at.
 - Cut text ends in "…". Control characters and runs of whitespace become one space.
 
 **Errors** are tool results with `isError: true` in v1's shape: `{"error": {code, message, next_step, retryable, retry_after?, resets_at?, details?, corrected_arguments?}}`.
@@ -117,11 +119,12 @@ claude mcp add --transport http gethookd http://localhost:3001/mcp --header "Aut
 - When v1 named a fix for every problem, `corrected_arguments` is the whole argument object to call again with. With fewer than certain fixes, none is offered.
 - **Codes the MCP server adds** (only for failures that never reach v1):
   - `upstream_unavailable`: v1 unreachable or too slow, after one retry; retryable.
-  - `upstream_invalid_response`: v1 answered with something that is not a v1 response.
+  - `upstream_invalid_response`: v1 answered with something that is not a v1 response, including a redirect (never followed, so the caller's key can't be sent elsewhere).
+  - `mcp_internal_error`: this server failed while handling the call; retryable. The failure is logged as its class and message only, with anything like a key redacted.
 
 **Retries:** after a timeout, a dropped connection or a 5xx, the server retries v1 once with the same `Idempotency-Key`, so the call is billed once (see Billing, "MCP retries"). 4xx and 429 are never retried.
 
-**Sessions:** a session id is a random UUID. Idle sessions close after 30 minutes, and at most 1,000 are open. Requests with a `Host` header not in `MCP_ALLOWED_HOSTS` are refused (DNS-rebinding protection), and bodies are capped at 1 MB.
+**Sessions:** `initialize` needs an `Authorization: Bearer` header (v1 still checks the key on every tool call), so callers without a key can't open sessions. A session id is a random UUID. Sessions idle for 30 minutes close (one with an open stream is not idle). At most 1,000 are open; a new one closes the one unused for longest. Requests with a `Host` header not in `MCP_ALLOWED_HOSTS` are refused (DNS-rebinding protection), and bodies are capped at 1 MB. On SIGTERM, sessions and their streams are closed first, so shutdown doesn't wait on them.
 
 ### Errors
 

@@ -134,6 +134,15 @@ describe('corrected_arguments: the whole call to make instead, when v1 knows the
     expect(error.corrected_arguments).toEqual({ format: 'video' });
   });
 
+  it('drops an argument get_ad does not take (v1 allows none there)', async () => {
+    h.v1.reply(invalid([{ param: 'verbose', issue: 'unknown_parameter', message: 'm', allowed: [] }]));
+    const client = await h.connect();
+
+    const error = payload(await client.callTool({ name: 'get_ad', arguments: { id: 3, verbose: true } })).error;
+
+    expect(error.corrected_arguments).toEqual({ id: 3 });
+  });
+
   it('offers none when one problem has no known fix, and passes v1\'s details on', async () => {
     const details = [
       { param: 'format', issue: 'invalid_value', message: 'm', allowed: ['image', 'video', 'carousel'], did_you_mean: 'video' },

@@ -102,7 +102,7 @@ function nextStep(v1: V1ErrorBody, tool: string, args: Record<string, unknown>, 
         return 'A cursor continues the search it came from. To get the next page of that search, call search_ads with only {"cursor": <the cursor>}. To run a different search, call search_ads without cursor.';
       }
 
-      return `Fix each argument listed in details (allowed values are given there), then call ${tool} again. Do not retry the same arguments.`;
+      return `Fix each argument listed in details (allowed values are given there where there are any), then call ${tool} again. Do not retry the same arguments.`;
     }
     case 'rate_limited':
       return `Wait ${v1.retry_after ?? 60} seconds, then call ${tool} again with the same arguments. This API key may make 60 calls per minute.`;
@@ -148,7 +148,8 @@ function correctedArguments(details: Detail[], args: Record<string, unknown>): R
       return null;
     }
 
-    if (detail.issue === 'empty_value') {
+    // An empty value, or an unknown argument where nothing else is allowed: leave it out.
+    if (detail.issue === 'empty_value' || (detail.issue === 'unknown_parameter' && detail.did_you_mean === undefined && Array.isArray(detail.allowed) && detail.allowed.length === 0)) {
       delete corrected[param];
       continue;
     }
