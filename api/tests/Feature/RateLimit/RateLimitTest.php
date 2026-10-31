@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Redis;
 use Illuminate\Testing\TestResponse;
 use Predis\Connection\Resource\Exception\StreamInitException;
+use Predis\TimeoutException;
 
 function v0Call(string $key): TestResponse
 {
@@ -138,6 +139,35 @@ it('refuses requests instead of letting them through unlimited when Redis is dow
     $response->assertHeader('Retry-After', '5');
     expect(v0Call($this->key)->assertStatus(400)->getContent())->toBe('{"error":"Invalid request"}');
     Exceptions::assertReported(StreamInitException::class);
+});
+
+it('fails fast, not after a minute, when Redis accepts connections but never answers', function () {
+    Exceptions::fake();
+    // The operating system accepts connections to this socket; nothing ever reads or replies.
+    $silent = stream_socket_server('tcp://127.0.0.1:0');
+    config(['database.redis.default.port' => (int) substr(strrchr(stream_socket_get_name($silent, false), ':'), 1)]);
+    app()->forgetInstance('redis');
+    Redis::clearResolvedInstances();
+
+    $started = microtime(true);
+    $response = v1('GET', '/api/v1/niches', $this->key);
+
+    assertApiError($response, ErrorCode::Unavailable, withRetryAfter: true);
+    expect(microtime(true) - $started)->toBeLessThan(2);
+    Exceptions::assertReported(TimeoutException::class);
+    fclose($silent);
+});
+
+it('counts HEAD requests and paths with a trailing slash', function () {
+    spendRateLimit($this->key, 58);
+    $auth = ['Authorization' => "Bearer {$this->key}", 'Accept' => 'application/json'];
+
+    app('auth')->forgetGuards();
+    $this->call('HEAD', '/api/v1/niches', server: ['HTTP_AUTHORIZATION' => "Bearer {$this->key}"])->assertOk();
+    app('auth')->forgetGuards();
+    $this->get('/api/v1/niches/', $auth)->assertOk();
+
+    assertApiError(v1('GET', '/api/v1/niches', $this->key), ErrorCode::RateLimited, withRetryAfter: true);
 });
 
 it('issues keys whose ids do not collide with a previous test run', function () {

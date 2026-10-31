@@ -166,6 +166,11 @@ return [
             'backoff_algorithm' => env('REDIS_BACKOFF_ALGORITHM', 'decorrelated_jitter'),
             'backoff_base' => env('REDIS_BACKOFF_BASE', 100),
             'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
+            // Seconds to connect and to wait for each reply (predis). Every API request asks Redis
+            // for its rate limit, so a hung Redis must fail fast (503) rather than hold the request
+            // for PHP's 60-second default.
+            'timeout' => (float) env('REDIS_TIMEOUT', 0.5),
+            'read_write_timeout' => (float) env('REDIS_READ_WRITE_TIMEOUT', 0.5),
         ],
 
         'cache' => [
@@ -179,6 +184,11 @@ return [
             'backoff_algorithm' => env('REDIS_BACKOFF_ALGORITHM', 'decorrelated_jitter'),
             'backoff_base' => env('REDIS_BACKOFF_BASE', 100),
             'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
+            // Seconds to connect and to wait for each reply (predis). Every API request asks Redis
+            // for its rate limit, so a hung Redis must fail fast (503) rather than hold the request
+            // for PHP's 60-second default.
+            'timeout' => (float) env('REDIS_TIMEOUT', 0.5),
+            'read_write_timeout' => (float) env('REDIS_READ_WRITE_TIMEOUT', 0.5),
         ],
 
     ],

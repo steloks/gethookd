@@ -633,3 +633,28 @@ Log of the important prompts used during this assessment. Add an entry per task,
   - "No quota check before running" was covered by the in-transaction check. A test now shows that an over-quota call is refused before it runs (an invalid search gets `quota_exceeded`, and the search never queries).
   - Removing the account lock is caught by the concurrency quota test.
 - The concurrency suite passed 5 runs in a row, with no server processes left. Full suite passed; Pint clean.
+
+## 22. Fixes from the rate-limiter audit
+
+**Prompt:** "@security-auditor check the rate limiter", then "yes go on, fix it" (both Mediums and the missing tests).
+
+**What changed:**
+- **The test Redis guard checks the live connection.** `Tests\TestRedis::assertSafe()` reads the database of the actual predis connection, because a `REDIS_URL` ending in `/0` overrides the configured database while the config still says 15. `phpunit.xml` forces `REDIS_URL` empty and forces `REDIS_DB`, `DB_DATABASE` and `DB_URL`, so values exported in the shell can't win. `tests/Feature/TestSafetyTest.php` proves a `/0` URL is refused.
+- **Redis timeouts** of 0.5 s for connecting and for each reply (`REDIS_TIMEOUT`, `REDIS_READ_WRITE_TIMEOUT`, in `.env.example`). A test points Redis at a socket that accepts connections and never answers, and expects a 503 in under 2 s (it was 60 s).
+- New tests: HEAD and trailing-slash requests count against the limit.
+- README: Redis timeouts, and the clock note (the app server's clock, not Redis's) as a documented limitation.
+- **`tests/Concurrency` now uses worker processes, not an HTTP server.**
+  - With `php -S` (8 workers), a request now and then got "Empty reply from server": the server log showed a busy worker accepting a second connection and dropping it. That is a limitation of PHP's dev server, and retrying would hide real double-billing.
+  - The test now starts 20 PHP processes (`tests/Concurrency/worker.php`). Each boots the app, they wait at a file barrier, then all send their requests through the HTTP kernel at once, each with its own database and Redis connections, like 20 PHP-FPM workers.
+  - On the way: Laravel's process timeout (60 s) killed the server's main process and left its workers orphaned, which hung a run. That is moot now that there is no server.
+  - New: 100 requests from one key (v0 and v1 mixed) let exactly 60 through.
+
+**Verification:**
+- The concurrency suite passed 6 runs in a row, leaving no processes behind.
+- Mutations: 6 run, 6 caught.
+  - A non-atomic limiter (read, then write) let more than 60 through.
+  - Removing the account lock overshot the quota.
+  - Skipping the key claim, and treating a reused key as a repeat, both caught.
+  - With no read timeout, the request hung for 60 s.
+  - A guard that trusts the config let `/0` through.
+- Full suite passed; Pint clean.
