@@ -112,6 +112,31 @@ The MCP server calls v1, so `search_ads` and `get_ad` are billed through these; 
 
 **MCP retries:** the MCP server sends one `Idempotency-Key` per tool call, derived from the MCP session and the JSON-RPC request id, and reuses it when it retries v1 after a timeout or 5xx, or when the client re-sends the same message. A model deciding to call a tool again is a new tool call and is billed, like a REST client sending a new request: nothing distinguishes "retry" from "ask again" except the request id, and treating identical arguments as a retry would make deliberate repeats free.
 
+### API keys and usage
+
+Keys are created, listed and revoked in two places that share one implementation (`App\Auth\KeyManagement`):
+
+- **The developer page's endpoints** (`/developer/keys`, `/developer/usage`): the keys of the one hard-coded local user, with no login (as the spec allows). In its place:
+  - Laravel's session and CSRF protection: writes must be same-origin or carry the session's CSRF token.
+  - A host check: only `localhost` and `127.0.0.1` (`DEVELOPER_HOSTS`), so a site that points its own name at 127.0.0.1 gets nothing.
+  - No CORS headers, and the session never authenticates `/api/*` (Sanctum's `guard` is empty).
+- **The API** (documented in the OpenAPI spec), for the account that owns the calling key:
+  - `GET /api/v1/keys`, `POST /api/v1/keys` (`{"name": "…", "scopes": ["search:read"]}`) and `DELETE /api/v1/keys/{id}` need the `keys:manage` scope.
+  - `GET /api/v1/usage` works with either scope, so an agent can check its remaining quota.
+
+Rules:
+
+- **A new key is shown once,** in the create response, sent with `Cache-Control: no-store`. Only its SHA-256 is stored; lists show the 12-character `prefix`.
+- **A key without scopes in the request gets `search:read`.** Unknown fields and invalid values are rejected with 422, with `did_you_mean`, like search parameters.
+- **Revoking sets `revoked_at` and keeps the row,** so the key stays listed.
+  - The key fails on its very next request, REST and MCP.
+  - Revoking again keeps the first time.
+  - A key may revoke itself.
+  - Another account's key, or a malformed id, is `not_found`.
+- **`last_used_at`** is the last request made with the key, refused ones included (Sanctum writes it on every authenticated request).
+- **Usage** is the account's billable calls this calendar month (UTC), split by `rest` and `mcp`, against the 1,000 quota. It is counted from `billable_calls`, the table billing writes; there is no second counter. Each listed key shows its own count for the month.
+- **Key management and usage are never billed,** but they count against the calling key's rate limit.
+
 ### MCP server (`mcp/`)
 
 A Node 22 / TypeScript MCP server over Streamable HTTP at `http://localhost:3001/mcp`, with three tools: `list_niches`, `search_ads` and `get_ad`. It is a thin client of v1:

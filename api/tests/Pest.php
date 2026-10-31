@@ -70,15 +70,16 @@ function v1Key(array $scopes = [ApiScope::SearchRead]): string
  */
 /**
  * @param  array<string, string>  $headers  more request headers, e.g. Idempotency-Key
+ * @param  array<mixed>|null  $body  a JSON request body
  */
-function v1(string $method, string $uri, ?string $key = null, array $headers = []): TestResponse
+function v1(string $method, string $uri, ?string $key = null, array $headers = [], ?array $body = null): TestResponse
 {
     // The test client reuses one app; a real request starts with fresh guards.
     app('auth')->forgetGuards();
     $headers = ($key === null ? [] : ['Authorization' => "Bearer {$key}"]) + $headers;
 
-    $response = test()->json($method, $uri, [], $headers);
-    OpenApi::assertMatches($response, $method, $uri, $headers);
+    $response = test()->json($method, $uri, $body ?? [], $headers);
+    OpenApi::assertMatches($response, $method, $uri, $headers, $body);
 
     return $response;
 }

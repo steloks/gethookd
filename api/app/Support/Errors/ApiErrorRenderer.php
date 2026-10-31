@@ -3,7 +3,9 @@
 namespace App\Support\Errors;
 
 use Illuminate\Auth\AuthenticationException;
+use Illuminate\Http\Exceptions\OriginMismatchException;
 use Illuminate\Http\Request;
+use Illuminate\Session\TokenMismatchException;
 use Laravel\Sanctum\Exceptions\MissingAbilityException;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
@@ -35,6 +37,11 @@ final class ApiErrorRenderer
                 ErrorCode::NotFound,
                 "There is no {$request->method()} ".SafeText::path($request).'.',
             ),
+            self::isForgery($e) => new ApiError(
+                ErrorCode::Forbidden,
+                'This request did not come from the developer page (its CSRF token is missing or invalid).',
+                'Reload the developer page and try again. API clients use /api/v1/keys with a keys:manage key instead.',
+            ),
             $e instanceof MethodNotAllowedHttpException => new ApiError(
                 ErrorCode::MethodNotAllowed,
                 SafeText::path($request)." does not support {$request->method()}.",
@@ -43,6 +50,15 @@ final class ApiErrorRenderer
             $e instanceof HttpExceptionInterface => self::byStatus($e),
             default => new ApiError(ErrorCode::InternalError),
         };
+    }
+
+    /**
+     * A refused cross-site request (Laravel turns a token mismatch into a 419 before we see it).
+     */
+    private static function isForgery(Throwable $e): bool
+    {
+        return $e instanceof TokenMismatchException || $e instanceof OriginMismatchException
+            || $e->getPrevious() instanceof TokenMismatchException || $e->getPrevious() instanceof OriginMismatchException;
     }
 
     /**

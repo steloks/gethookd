@@ -21,6 +21,7 @@ security:
 tags:
   - name: ads
   - name: niches
+  - name: keys
 
 paths:
   /api/v1/ads:
@@ -212,14 +213,163 @@ paths:
         default:
           $ref: '#/components/responses/OtherError'
 
+  /api/v1/keys:
+    get:
+      tags: [keys]
+      operationId: listKeys
+      summary: List the account's API keys
+      description: |
+        Every key of the account that owns the calling key, newest first, revoked ones included
+        (keys are never deleted). Only the visible `prefix` is shown, never the key. Needs the
+        `keys:manage` scope. Not billed. Takes no query parameters.
+      responses:
+        '200':
+          description: The account's keys.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ApiKey'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '422':
+          $ref: '#/components/responses/InvalidParameters'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        default:
+          $ref: '#/components/responses/OtherError'
+    post:
+      tags: [keys]
+      operationId: createKey
+      summary: Create an API key
+      description: |
+        Creates a key for the account that owns the calling key. The response is the only time
+        the full key (`secret`) is ever shown; it is stored only as a hash. Needs the
+        `keys:manage` scope. Not billed. Unknown fields and invalid values are rejected with
+        422 `invalid_parameters`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewKey'
+      responses:
+        '201':
+          description: 'The new key, with its secret (shown once). Sent with `Cache-Control: no-store`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedKey'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '422':
+          $ref: '#/components/responses/InvalidParameters'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        default:
+          $ref: '#/components/responses/OtherError'
+  /api/v1/keys/{id}:
+    delete:
+      tags: [keys]
+      operationId: revokeKey
+      summary: Revoke an API key
+      description: |
+        Revokes one of the account's keys: it fails on its very next request (REST and MCP). The
+        key stays in the list with `revoked_at`; revoking it again keeps the first time. A key may
+        revoke itself. Needs the `keys:manage` scope. Not billed. Takes no query parameters.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The key's `id` from the key list.
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: The revoked key.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ApiKey'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/InvalidParameters'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        default:
+          $ref: '#/components/responses/OtherError'
+  /api/v1/usage:
+    get:
+      tags: [keys]
+      operationId: getUsage
+      summary: Billable calls this month against the quota
+      description: |
+        The account's billable calls in the current calendar month (UTC), counted from the same
+        table billing writes, against the monthly quota. Works with either scope (`search:read`
+        or `keys:manage`), so an agent can check what is left. Not billed. Takes no query parameters.
+      responses:
+        '200':
+          description: Usage this period.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Usage'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/InsufficientScope'
+        '422':
+          $ref: '#/components/responses/InvalidParameters'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        default:
+          $ref: '#/components/responses/OtherError'
+
 components:
   securitySchemes:
     apiKey:
       type: http
       scheme: bearer
       description: |
-        An API key (`ghk_…`) as `Authorization: Bearer <key>`, with the `search:read` scope. The same
-        key works on v0 as the `api_key` query parameter; v1 does not read that parameter.
+        An API key (`ghk_…`) as `Authorization: Bearer <key>`. Searching needs the `search:read`
+        scope, key management the `keys:manage` scope, and /api/v1/usage either. The same key works
+        on v0 as the `api_key` query parameter; v1 does not read that parameter.
 
         Each key may make 60 requests per clock minute (12:00:00–12:00:59, then 12:01:00–…), shared
         by v0, v1 and the MCP server. Every request with a valid key counts, including ones refused
@@ -254,6 +404,107 @@ components:
         enum: ['true', 'false']
 
   schemas:
+    ApiKey:
+      type: object
+      description: An API key as listed. The key itself is never shown after it is created.
+      additionalProperties: false
+      required: [id, name, prefix, scopes, created_at, last_used_at, revoked_at, billable_calls_this_period]
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+        prefix:
+          type: string
+          description: The first 12 characters of the key, to tell keys apart.
+          pattern: '^ghk_[A-Za-z0-9]{8}$'
+        scopes:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [search:read, keys:manage]
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: The last request made with this key, refused ones included. Null if never used.
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the key was revoked; null while it works.
+        billable_calls_this_period:
+          type: integer
+          minimum: 0
+          description: Billable calls made with this key in the current calendar month (UTC).
+    NewKey:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: A label to tell this key apart (trimmed).
+        scopes:
+          type: array
+          minItems: 1
+          description: Defaults to `["search:read"]`.
+          items:
+            type: string
+            enum: [search:read, keys:manage]
+    CreatedKey:
+      type: object
+      additionalProperties: false
+      required: [data, secret, note]
+      properties:
+        data:
+          $ref: '#/components/schemas/ApiKey'
+        secret:
+          type: string
+          description: The full key. Shown only in this response; store it now.
+          pattern: '^ghk_[A-Za-z0-9]{40}[0-9a-f]{8}$'
+        note:
+          type: string
+    Usage:
+      type: object
+      additionalProperties: false
+      required: [period_start, resets_at, billable_calls, quota, remaining, by_client]
+      properties:
+        period_start:
+          type: string
+          format: date-time
+        resets_at:
+          type: string
+          format: date-time
+          description: The end of the period, when the count starts again.
+        billable_calls:
+          type: integer
+          minimum: 0
+        quota:
+          type: integer
+          minimum: 1
+        remaining:
+          type: integer
+          minimum: 0
+        by_client:
+          type: object
+          additionalProperties: false
+          required: [rest, mcp]
+          description: The same calls split by caller; the MCP server identifies itself.
+          properties:
+            rest:
+              type: integer
+              minimum: 0
+            mcp:
+              type: integer
+              minimum: 0
     Ad:
       type: object
       additionalProperties: false
@@ -416,10 +667,10 @@ components:
       properties:
         param:
           type: string
-          description: The parameter as sent (shortened if long).
+          description: The parameter or body field as sent (shortened if long).
         issue:
           type: string
-          enum: [unknown_parameter, array_syntax, repeated_parameter, invalid_value, empty_value, out_of_range, too_long, cursor_mismatch]
+          enum: [unknown_parameter, missing, array_syntax, repeated_parameter, invalid_value, empty_value, out_of_range, too_long, cursor_mismatch]
         message:
           type: string
         allowed:
@@ -451,7 +702,7 @@ components:
                       code:
                         enum: [unauthenticated]
     InsufficientScope:
-      description: The key lacks the `search:read` scope (`insufficient_scope`).
+      description: The key lacks the scope this endpoint needs (`insufficient_scope`).
       content:
         application/json:
           schema:
@@ -463,7 +714,7 @@ components:
                       code:
                         enum: [insufficient_scope]
     NotFound:
-      description: There is no ad with that id (`not_found`).
+      description: There is no ad, or no key of this account, with that id (`not_found`).
       content:
         application/json:
           schema:
@@ -474,8 +725,20 @@ components:
                     properties:
                       code:
                         enum: [not_found]
+    BadRequest:
+      description: The request body is not a JSON object (`bad_request`).
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Error'
+              - properties:
+                  error:
+                    properties:
+                      code:
+                        enum: [bad_request]
     InvalidParameters:
-      description: Unknown, repeated or invalid query parameters or Idempotency-Key header (`invalid_parameters`), each listed in `details`.
+      description: Unknown, repeated or invalid query parameters, body fields or Idempotency-Key header (`invalid_parameters`), each listed in `details`.
       content:
         application/json:
           schema:

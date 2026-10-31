@@ -757,3 +757,26 @@ Log of the important prompts used during this assessment. Add an entry per task,
 - **After:** 4/5 right on the first try. Task 2 made no tool call: an honest, correct answer from the description alone. It was recorded as a miss, not explained away. With one run per task it is likely noise.
 - **Country probe:** 2 search calls instead of 26 (no `get_ad`), covering 50 ads instead of 25.
 - MCP_EVAL.md is complete: before/after tables, the misuse transcript, the change, the transcript after, and the limits of a single-run eval.
+
+## 28. Key-management endpoints
+
+**Prompt:** "ok go with your suggestion for the key endpoints" (web routes with session + CSRF for the local user, plus `/api/v1/keys` with `keys:manage`).
+
+**What was built:**
+- `App\Auth\KeyManagement` (list, create, revoke, usage), used by two thin controllers: `Api\V1\KeyController` (owner = the calling key's user) and `Developer\KeyController` (owner = the local user).
+- **API routes:** `GET/POST /api/v1/keys` and `DELETE /api/v1/keys/{id}` need `keys:manage`; `GET /api/v1/usage` takes either scope. All of them go through auth, the rate limit and query-parameter rejection, and none is billed.
+- **Web routes** `/developer/keys` and `/developer/usage`: session and CSRF (Laravel 13 `PreventRequestForgery`: same-origin or token), the `LocalHostOnly` host allow-list (`DEVELOPER_HOSTS`), and errors in the API shape. A CSRF failure is a 403 `forbidden` with a reload hint.
+- Validation of the create body:
+  - unknown fields → `unknown_parameter` with `did_you_mean`;
+  - `name` required (new issue `missing`), 1–100 characters, trimmed;
+  - `scopes` a non-empty list of known scopes, with `did_you_mean`;
+  - a non-object or invalid JSON body (depth 16) → 400 `bad_request`.
+- The create response has `Cache-Control: no-store`.
+- `Meter::period()` is public, so usage and billing share the month boundary.
+- OpenAPI: 4 operations, the `ApiKey`, `NewKey`, `CreatedKey` and `Usage` schemas, and a `BadRequest` response. The test helpers now send and validate JSON bodies, and new parity tests check scopes, fields and the name limit.
+
+**Found on the way:** `pluck(DB::raw('count(*)'))` doesn't work; it now uses a select alias.
+
+**Verification:**
+- Pest: 531 passed; Pint clean.
+- Mutations: 22 run, 21 caught at first. "revoke: no id check" was missed because the malformed ids didn't point at a real key. A test now uses `<real id>.0`, `<real id>abc` and `<real id>%20`, and the mutation is caught.

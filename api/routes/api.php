@@ -3,6 +3,7 @@
 use App\Enums\ApiScope;
 use App\Http\Controllers\Api\V0\AdController as V0AdController;
 use App\Http\Controllers\Api\V1\AdController as V1AdController;
+use App\Http\Controllers\Api\V1\KeyController as V1KeyController;
 use App\Http\Controllers\Api\V1\NicheController as V1NicheController;
 use App\Http\Middleware\MeterBillableCall;
 use App\Http\Middleware\RateLimitPerKey;
@@ -19,9 +20,22 @@ Route::prefix('v0')->middleware(['auth:sanctum', RateLimitPerKey::class, 'abilit
 });
 
 // v1: key from Authorization: Bearer only. Errors use the shape in App\Support\Errors.
-Route::prefix('v1')->middleware(['auth:sanctum', RateLimitPerKey::class, 'abilities:'.ApiScope::SearchRead->value])->group(function () {
-    // Billable endpoints (README, "Billing"); /niches is free.
-    Route::get('ads', [V1AdController::class, 'index'])->middleware(MeterBillableCall::class.':v1.ads.search');
-    Route::get('ads/{id}', [V1AdController::class, 'show'])->middleware([RejectQueryParameters::class, MeterBillableCall::class.':v1.ads.show']);
-    Route::get('niches', [V1NicheController::class, 'index'])->middleware(RejectQueryParameters::class);
+Route::prefix('v1')->middleware(['auth:sanctum', RateLimitPerKey::class])->group(function () {
+    Route::middleware('abilities:'.ApiScope::SearchRead->value)->group(function () {
+        // Billable endpoints (README, "Billing"); /niches is free.
+        Route::get('ads', [V1AdController::class, 'index'])->middleware(MeterBillableCall::class.':v1.ads.search');
+        Route::get('ads/{id}', [V1AdController::class, 'show'])->middleware([RejectQueryParameters::class, MeterBillableCall::class.':v1.ads.show']);
+        Route::get('niches', [V1NicheController::class, 'index'])->middleware(RejectQueryParameters::class);
+    });
+
+    // Key management: the keys of the account that owns the calling key. Never billed.
+    Route::middleware(['abilities:'.ApiScope::KeysManage->value, RejectQueryParameters::class])->group(function () {
+        Route::get('keys', [V1KeyController::class, 'index']);
+        Route::post('keys', [V1KeyController::class, 'store']);
+        Route::delete('keys/{id}', [V1KeyController::class, 'destroy']);
+    });
+
+    // Usage against the quota: readable with either scope, so an agent can check what is left.
+    Route::get('usage', [V1KeyController::class, 'usage'])
+        ->middleware(['ability:'.ApiScope::SearchRead->value.','.ApiScope::KeysManage->value, RejectQueryParameters::class]);
 });

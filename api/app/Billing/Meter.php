@@ -118,9 +118,11 @@ final class Meter
     }
 
     /**
-     * @return array{0: CarbonImmutable, 1: CarbonImmutable} the UTC calendar month of $now: [start, end)
+     * The billing period (UTC calendar month) containing $now: [start, end).
+     *
+     * @return array{0: CarbonImmutable, 1: CarbonImmutable}
      */
-    private static function period(CarbonInterface $now): array
+    public static function period(CarbonInterface $now): array
     {
         $start = CarbonImmutable::instance($now)->utc()->startOfMonth();
 

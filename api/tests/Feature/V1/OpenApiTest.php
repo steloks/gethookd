@@ -1,10 +1,12 @@
 <?php
 
+use App\Auth\KeyManagement;
 use App\Enums\AdFormat;
 use App\Enums\AdStatus;
 use App\Enums\ApiScope;
 use App\Models\Ad;
 use App\Models\Niche;
+use App\Models\PersonalAccessToken;
 use App\Search\Cursor;
 use App\Search\SearchParams;
 use App\Search\SearchRequestParser;
@@ -20,6 +22,7 @@ use Illuminate\Http\Response;
 use Illuminate\Routing\Route as LaravelRoute;
 use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\TestResponse;
 use PHPUnit\Framework\AssertionFailedError;
 use Tests\OpenApi;
@@ -171,17 +174,25 @@ it('documents the Idempotency-Key header and the Billed header on exactly the bi
     foreach (spec('paths') as $path => $operations) {
         foreach ($operations as $method => $operation) {
             $refs = array_column($operation['parameters'] ?? [], '$ref');
+            $success = $operation['responses']['200'] ?? $operation['responses']['201'];
             if (in_array('#/components/parameters/IdempotencyKey', $refs, true)) {
-                expect($operation['responses']['200']['headers']['Billed']['$ref'] ?? null)->toBe('#/components/headers/Billed');
+                expect($success['headers']['Billed']['$ref'] ?? null)->toBe('#/components/headers/Billed');
                 $billable[] = "{$method} {$path}";
             } else {
-                expect($operation['responses']['200'])->not->toHaveKey('headers');
+                expect($success)->not->toHaveKey('headers');
             }
         }
     }
 
     expect($billable)->toBe(['get /api/v1/ads', 'get /api/v1/ads/{id}'])
         ->and(spec('components/parameters/IdempotencyKey/schema')['maxLength'])->toBe(255);
+});
+
+it('documents the key fields, scopes and limits the API uses', function () {
+    expect(spec('components/schemas/ApiKey/properties/scopes/items')['enum'])->toBe(ApiScope::values())
+        ->and(spec('components/schemas/NewKey/properties/scopes/items')['enum'])->toBe(ApiScope::values())
+        ->and(array_keys(spec('components/schemas/NewKey/properties')))->toBe(KeyManagement::CREATE_FIELDS)
+        ->and(spec('components/schemas/NewKey/properties/name')['maxLength'])->toBe(KeyManagement::MAX_NAME_LENGTH);
 });
 
 it('documents every error code in the registry', function () {
@@ -210,7 +221,83 @@ function documentedResponseRequests(): array
         $model::retrieved(fn () => throw new RuntimeException('boom'));
     };
 
+    $manager = fn () => v1Key([ApiScope::KeysManage]);
+    $searchOnly = fn () => v1Key([ApiScope::SearchRead]);
+    $limitedManager = function () {
+        $key = v1Key([ApiScope::KeysManage]);
+        spendRateLimit($key);
+
+        return $key;
+    };
+    $ownKeyPath = fn () => '/api/v1/keys/'.PersonalAccessToken::findToken(v1Key())->getKey();
+    $failingKeyReads = function () use ($manager) {
+        $key = $manager();
+        Exceptions::fake();
+        PersonalAccessToken::retrieved(fn () => throw new RuntimeException('boom'));
+
+        return $key;
+    };
+
     return [
+        'get /api/v1/keys 200' => fn () => v1('GET', '/api/v1/keys', $manager()),
+        'get /api/v1/keys 401' => fn () => v1('GET', '/api/v1/keys'),
+        'get /api/v1/keys 403' => fn () => v1('GET', '/api/v1/keys', $searchOnly()),
+        'get /api/v1/keys 422' => fn () => v1('GET', '/api/v1/keys?status=active', $manager()),
+        'get /api/v1/keys 429' => fn () => v1('GET', '/api/v1/keys', $limitedManager()),
+        'get /api/v1/keys 500' => fn () => v1('GET', '/api/v1/keys', $failingKeyReads()),
+        'post /api/v1/keys 201' => fn () => v1('POST', '/api/v1/keys', $manager(), body: ['name' => 'laptop', 'scopes' => ['search:read']]),
+        'post /api/v1/keys 400' => fn () => v1('POST', '/api/v1/keys', $manager(), body: ['laptop']),
+        'post /api/v1/keys 401' => fn () => v1('POST', '/api/v1/keys', body: ['name' => 'laptop']),
+        'post /api/v1/keys 403' => fn () => v1('POST', '/api/v1/keys', $searchOnly(), body: ['name' => 'laptop']),
+        'post /api/v1/keys 422' => fn () => v1('POST', '/api/v1/keys', $manager(), body: ['name' => 'laptop', 'scope' => ['search:read']]),
+        'post /api/v1/keys 429' => fn () => v1('POST', '/api/v1/keys', $limitedManager(), body: ['name' => 'laptop']),
+        'post /api/v1/keys 500' => fn () => v1('POST', '/api/v1/keys', $failingKeyReads(), body: ['name' => 'laptop']),
+        'delete /api/v1/keys/{id} 200' => function () use ($manager, $ownKeyPath) {
+            $key = $manager();
+
+            return v1('DELETE', $ownKeyPath(), $key);
+        },
+        'delete /api/v1/keys/{id} 401' => fn () => v1('DELETE', $ownKeyPath()),
+        'delete /api/v1/keys/{id} 403' => fn () => v1('DELETE', $ownKeyPath(), $searchOnly()),
+        'delete /api/v1/keys/{id} 404' => fn () => v1('DELETE', '/api/v1/keys/999999', $manager()),
+        'delete /api/v1/keys/{id} 422' => function () use ($manager, $ownKeyPath) {
+            $key = $manager();
+
+            return v1('DELETE', $ownKeyPath().'?force=1', $key);
+        },
+        'delete /api/v1/keys/{id} 429' => function () use ($limitedManager, $ownKeyPath) {
+            $key = $limitedManager();
+
+            return v1('DELETE', $ownKeyPath(), $key);
+        },
+        'delete /api/v1/keys/{id} 500' => function () use ($failingKeyReads, $ownKeyPath) {
+            $path = $ownKeyPath();
+
+            return v1('DELETE', $path, $failingKeyReads());
+        },
+        'get /api/v1/usage 200' => fn () => v1('GET', '/api/v1/usage', $searchOnly()),
+        'get /api/v1/usage 401' => fn () => v1('GET', '/api/v1/usage'),
+        'get /api/v1/usage 403' => function () {
+            // A key with neither scope can't be issued through the API; give a stored one no abilities.
+            $key = v1Key();
+            PersonalAccessToken::findToken($key)->forceFill(['abilities' => []])->save();
+
+            return v1('GET', '/api/v1/usage', $key);
+        },
+        'get /api/v1/usage 422' => fn () => v1('GET', '/api/v1/usage?month=10', $searchOnly()),
+        'get /api/v1/usage 429' => function () {
+            $key = v1Key();
+            spendRateLimit($key);
+
+            return v1('GET', '/api/v1/usage', $key);
+        },
+        'get /api/v1/usage 500' => function () use ($searchOnly) {
+            $key = $searchOnly();
+            Exceptions::fake();
+            Schema::drop('billable_calls');
+
+            return v1('GET', '/api/v1/usage', $key);
+        },
         'get /api/v1/ads 200' => fn () => v1('GET', '/api/v1/ads?niche=skincare&sort=impressions&limit=1', v1Key()),
         'get /api/v1/ads 401' => fn () => v1('GET', '/api/v1/ads'),
         'get /api/v1/ads 403' => fn () => v1('GET', '/api/v1/ads', $readOnly()),

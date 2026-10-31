@@ -24,3 +24,15 @@ Fixed windows of one clock minute, one Redis counter per key; see the README ("R
 - **Response size is a budget, not a hope.** Results are cut and measured after JSON encoding (quotes and emoji make the encoded text longer), with fallbacks that cut further, so a page has a hard upper bound. `limit` is capped at 25 in the tool even though v1 allows 100: the only argument the MCP server checks, because it is the tool's own budget.
 - **`impression_rank` is renamed `impression_rank_in_brand`** in tool output, and the descriptions say it does not compare brands. A model reading `impression_rank: 1` would otherwise call that ad the most-seen overall. ("Which pet supplies brand gets the most impressions?" can't be answered from this data, and the tools say so.)
 - **Retries:** one retry on timeout, dropped connection or 5xx, with the call's `Idempotency-Key` (sha256 of session id, JSON-RPC id, tool and arguments), so a lost answer is not billed twice. This is proved end to end: a proxy drops Laravel's first answer, and exactly one billing row is written.
+
+## Key management and the developer page
+
+- **One implementation, two doors.** `KeyManagement` serves both the developer page (`/developer/*`, for the hard-coded local user) and `/api/v1/keys` (for the account owning a `keys:manage` key). The page and the API can't drift; a test checks they return identical JSON for the same account.
+- **No login, so the page is protected by where requests come from:**
+  - CSRF on writes: same-origin, or a valid token.
+  - A host allow-list against DNS rebinding.
+  - No CORS on `/developer/*`.
+  - API routes never accept the session.
+  - In production this would be a real login; the endpoints already take the owner from one method, so only that method changes.
+- **Usage reads `billable_calls`, the table billing writes,** so the page, the quota and an invoice can't disagree.
+- `last_used_at` is written on every authenticated request (Sanctum's behaviour): one extra UPDATE per call. At scale it would be sampled, or batched through Redis.

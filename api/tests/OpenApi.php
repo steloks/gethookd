@@ -62,8 +62,9 @@ final class OpenApi
      * method, a test-only route) must have failed, with a body in the Error schema.
      *
      * @param  array<string, string>  $headers
+     * @param  array<mixed>|null  $body  the JSON body the request was sent with
      */
-    public static function assertMatches(TestResponse $response, string $method, string $uri, array $headers = []): void
+    public static function assertMatches(TestResponse $response, string $method, string $uri, array $headers = [], ?array $body = null): void
     {
         $template = self::operationPath($method, $uri);
         if ($template === null) {
@@ -79,7 +80,9 @@ final class OpenApi
         try {
             $validator->validate($response->baseResponse, $template, $method);
             if ($response->isSuccessful()) {
-                $request = Request::create($uri, $method);
+                $request = $body === null
+                    ? Request::create($uri, $method)
+                    : Request::create($uri, $method, server: ['CONTENT_TYPE' => 'application/json'], content: json_encode($body));
                 $request->headers->add($headers);
                 $validator->validate($request, $template, $method);
             }

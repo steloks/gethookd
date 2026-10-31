@@ -8,6 +8,7 @@ namespace App\Support\Errors;
 enum ParameterIssue: string
 {
     case UnknownParameter = 'unknown_parameter';
+    case Missing = 'missing';
     case ArraySyntax = 'array_syntax';
     case RepeatedParameter = 'repeated_parameter';
     case InvalidValue = 'invalid_value';

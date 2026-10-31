@@ -67,6 +67,9 @@ return [
 
     'timezone' => 'UTC',
 
+    // Host names the developer page answers on (it has no login; see App\Http\Middleware\LocalHostOnly).
+    'developer_hosts' => env('DEVELOPER_HOSTS', 'localhost,127.0.0.1'),
+
     /*
     |--------------------------------------------------------------------------
     | Application Locale Configuration
