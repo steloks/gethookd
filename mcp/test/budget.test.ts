@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { AD_BUDGET, clip, compactAd, fullAd, MAX_LIMIT, PAGE_BUDGET, RESULT_BUDGET } from '../src/budget.js';
+import { AD_BUDGET, clip, compactAd, fullAd, MAX_LIMIT, PAGE_BUDGET, RESULT_BUDGET, RESULT_COUNTRIES } from '../src/budget.js';
 import { ad, json, startHarness, type Harness } from './helpers.js';
 
 /** Copy that is as expensive as possible once serialised: quotes and backslashes double, control characters become \u00XX. */
@@ -45,6 +45,11 @@ describe('per-result budget', () => {
     const out = compactAd(normal);
     expect(out.headline).toBe('h'.repeat(120));
     expect(out.body).toBe('b'.repeat(160));
+  });
+
+  it(`lists at most ${RESULT_COUNTRIES} two-letter country codes per search result`, () => {
+    expect(compactAd(ad({ countries: ['US', 'GB'] })).countries).toEqual(['US', 'GB']);
+    expect(compactAd(ad({ countries: Array.from({ length: 30 }, () => 'DEU') })).countries).toEqual(Array(RESULT_COUNTRIES).fill('DE'));
   });
 
   it('cuts long body text to 160 characters in search results', () => {

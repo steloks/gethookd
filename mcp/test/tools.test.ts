@@ -84,6 +84,14 @@ describe('tool list', () => {
     expect(list.get_ad!.description).toContain('not comparable across brands');
   });
 
+  it('says there is no country filter and that results carry countries, so get_ad is not called per result', async () => {
+    const list = await tools();
+
+    expect(list.search_ads!.description).toContain('There is no country filter');
+    expect(list.search_ads!.description).toContain('Do not call get_ad on each result to find its countries');
+    expect(list.get_ad!.description).toContain('Search results already include each ad\'s countries');
+  });
+
   it('says when not to use each tool', async () => {
     const list = await tools();
 
@@ -129,6 +137,7 @@ describe('search_ads output', () => {
           end_date: '2026-10-25',
           days_active: 5,
           impression_rank_in_brand: 2,
+          countries: ['US', 'GB'],
         },
       ],
       next_cursor: 'CURSOR',

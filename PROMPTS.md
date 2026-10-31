@@ -706,3 +706,54 @@ Log of the important prompts used during this assessment. Add an entry per task,
 - Vitest 99 passed.
 - Mutations: 15 new ones run, 14 caught at first. "get_ad envelope ignored" was missed because the worst-case fixture was far below the budget. A test now sweeps body sizes around the limit, and the mutation is caught.
 - The original 33 mutations were rerun, and all are still caught.
+
+## 25. Docker and Makefile
+
+**Prompt:** "Lets implement the containerization with docker before this" (before the real-model eval).
+
+**What was built:**
+- `docker/app/Dockerfile`: one image with PHP 8.4 (pdo_pgsql, pcntl, intl, zip, bcmath) and Node 22, holding the API and the MCP server. The MCP tests read the Laravel source and the end-to-end tests start the API, so both apps share the image.
+- `docker-compose.yml`:
+  - `api` migrates, then serves on `php artisan serve` with 4 workers, and has a health check on `/up`.
+  - `mcp` waits for a healthy API. All ports are on 127.0.0.1.
+  - `APP_KEY` comes from a root `.env` that `make up` creates with openssl.
+- `Makefile` targets: `up`, `down`, `logs`, `ingest`, `seed`, `key`, `test`, `test-api`, `test-mcp`.
+- `db:seed-if-empty` command: `make up` seeds a fresh database but keeps existing data.
+
+**Found on the way:**
+- The silent-Redis test changed only the port, so in the container (Redis host `redis`) it got "connection refused" instead of a hang. It now sets the host too.
+- **Tests ran with `APP_ENV=local` in the container.** PHPUnit's `force` sets `getenv`/`$_ENV`, but Laravel reads `$_SERVER` first, where container (or exported shell) variables live. The forced values are now also set as `<server>` entries, and a test checks the environment is `testing`.
+  - The database and Redis guards had held regardless: the database name wasn't in the container environment, and the Redis guard checks the live connection.
+  - The first mutation check for this exported `DB_DATABASE=gethookd` with the forcing removed. It was blocked by the auto-mode classifier: the test refresh could have wiped dev data. It was rerun without a database export.
+- `LOG_CHANNEL` for tests is `single`, because `env()` turns the string "null" into a real null.
+
+**Verification:**
+- `make up` and `make test` in the dev stack: 442 Pest, 99 Vitest and 5 end-to-end tests passed, with no log noise.
+- Clean-clone check: copied exactly the files git would ship (no vendor, node_modules or .env) into a scratch folder, and ran it as a separate compose project with other ports and a fresh volume.
+  - `make up` built, migrated and seeded 20k ads.
+  - `make test` passed: 442 + 99 + 5.
+  - The scratch stack was then removed.
+- Mutations:
+  - Seed always / never seed: 2 run, 2 caught.
+  - `<server>` APP_ENV/LOG_CHANNEL removed: caught.
+
+## 26. Real-model eval: before round, probes, and the first change
+
+**Prompt:** "its ready" (three times: the before round, its rerun, the probes).
+
+- **First run discarded.** `claude -p` read stdin, which in the runner's loop was `tasks.txt`, so every conversation got all five tasks. Fixed with `< /dev/null`; a dry run with a fake `claude` showed one prompt per task and an empty stdin.
+- **Before round:** 5/5 right tool and arguments on the first try (`claude-opus-5-5`).
+- **Probes** (country, brand, count), to find a misuse. The country probe made 25 `get_ad` calls to read countries, because search results lacked them and nothing said there was no country filter.
+- **Change:** `countries` in search results (at most 10 codes), and descriptions that say there is no country filter and not to call get_ad per result.
+- Also fixed: country codes were cut with "…" (`D…`).
+- Runner: `TASKS` (another task file) and `--max-turns` (15) to cap cost.
+
+**Verification:** Vitest 101 passed. Mutations: 4 run, 4 caught. `make up` rebuilt the MCP container.
+
+## 27. Real-model eval: after round
+
+**Prompt:** "done" (after `run.sh after` and `TASKS=mcp/eval/probes.txt run.sh probes-after`).
+
+- **After:** 4/5 right on the first try. Task 2 made no tool call: an honest, correct answer from the description alone. It was recorded as a miss, not explained away. With one run per task it is likely noise.
+- **Country probe:** 2 search calls instead of 26 (no `get_ad`), covering 50 ads instead of 25.
+- MCP_EVAL.md is complete: before/after tables, the misuse transcript, the change, the transcript after, and the limits of a single-run eval.

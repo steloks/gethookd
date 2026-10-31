@@ -1,6 +1,27 @@
 # GetHookd ad search — v1 API and MCP server
 
-Work in progress for the GetHookd "Fullstack Engineer (API & MCP)" assessment. Done so far: the data model, deterministic seed, live ingest script, the frozen v0 endpoint with its contract test, API keys, and the v1 endpoints `GET /api/v1/ads` (with cursor pagination), `GET /api/v1/ads/{id}` and `GET /api/v1/niches`. Setup instructions (`make up`) come with the Docker/Makefile step.
+Work in progress for the GetHookd "Fullstack Engineer (API & MCP)" assessment. Done so far: the data model, deterministic seed, live ingest script, the frozen v0 endpoint with its contract test, the v1 API with cursor pagination, API keys, the rate limit, billing and quota, the MCP server, and Docker.
+
+## Run it
+
+Needs Docker (with Compose v2), `make` and `openssl`; nothing else on the host.
+
+```
+make up      # build and start Postgres, Redis, the API (:8000) and the MCP server (:3001); migrate; seed an empty database
+make key     # create a search:read API key (shown once): make key NAME=my-laptop
+make ingest  # live ingest: inserts 1-5 and deactivates 1-2 ads every second, until Ctrl-C
+make test    # all tests: Pest (API), Vitest (MCP), and the MCP end-to-end tests against the real API
+make seed    # replace all ads with the deterministic seed data
+make down    # stop everything (data is kept in the pgdata volume)
+```
+
+- The first `make up` builds the image (about 3 minutes). It creates `.env` in the repo root with a random `APP_KEY` (gitignored), which the containers use to sign cursors.
+- `make up` seeds only when there are no ads, so restarting keeps ingested data; `make seed` replaces it.
+- Tests run inside the API container against the separate `gethookd_test` database and Redis database 15, never the dev data. `make test-api` and `make test-mcp` run one side. The image contains the code as built, so run `make up` after changing code, before `make test`.
+- Ports are published on 127.0.0.1 only. Change them with `API_HOST_PORT`, `MCP_HOST_PORT`, `POSTGRES_HOST_PORT`, `REDIS_HOST_PORT`.
+- The API runs on PHP's built-in server with 4 workers (`php artisan serve`): fine for local use, not a production server.
+
+Try it: `curl -H "Authorization: Bearer <key>" "http://localhost:8000/api/v1/ads?niche=skincare&limit=2"`.
 
 The v1 API is described in [`api/openapi/v1.yaml`](api/openapi/v1.yaml) (OpenAPI 3.0). It is written by hand and kept true by tests:
 - Every v1 response the test suite receives is validated against it, and every request the API accepted must be valid by it too. A v1 request the document has no operation for must fail with a body in the `Error` schema.
@@ -39,7 +60,7 @@ Where the spec is ambiguous, this is what the code does and why.
 - Every search response has `next_cursor`: send it back as `?cursor=` for the next page. It is `null` on the last page.
 - The cursor carries the search (filters, sort, limit), so `?cursor=…` alone is enough. Sending it with the same filters also works. Sending it with a different filter or sort is a 422 `cursor_mismatch`, because the position would mean nothing in another search. `limit` may change from page to page.
 - Cursors are opaque and signed with a key derived from `APP_KEY`. A cursor that was changed, or issued under another key, is a 422. Rotating `APP_KEY` invalidates walks in progress. Cursors do not expire.
-- Without an `APP_KEY` (at least 32 characters) the API neither issues nor accepts cursors, so searches fail with a 500 `internal_error` instead of handing out cursors anyone could forge. `make up` must run `php artisan key:generate`.
+- Without an `APP_KEY` (at least 32 characters) the API neither issues nor accepts cursors, so searches fail with a 500 `internal_error` instead of handing out cursors anyone could forge. `make up` generates one (in the root `.env`).
 
 **Guarantees while ads are being ingested and deactivated during a walk** (proved by `tests/Feature/V1/CursorTest.php`, which runs the real ingest cycle between pages):
 
@@ -100,7 +121,7 @@ A Node 22 / TypeScript MCP server over Streamable HTTP at `http://localhost:3001
 - A `null` argument is sent as an empty value, which v1 rejects ("leave it out"); it is not dropped.
 - The tool list carries today's UTC date (in the `search_ads` description), so a model can turn "the last 30 days" into `started_after` before its first call. Every response also has `today`.
 
-**Run it locally:** `php artisan serve` in `api/`, then `cd mcp && npm install && npm start`. Settings, all optional: `MCP_PORT` (3001), `MCP_HOST` (127.0.0.1), `V1_BASE_URL` (http://127.0.0.1:8000), `V1_TIMEOUT_MS` (10000), `MCP_ALLOWED_HOSTS` (localhost and 127.0.0.1 on the port).
+**Run it:** `make up` starts it at `http://localhost:3001/mcp`. Without Docker: `php artisan serve` in `api/`, then `cd mcp && npm install && npm start`. Settings, all optional: `MCP_PORT` (3001), `MCP_HOST` (127.0.0.1), `V1_BASE_URL` (http://127.0.0.1:8000), `V1_TIMEOUT_MS` (10000), `MCP_ALLOWED_HOSTS` (localhost and 127.0.0.1 on the port).
 
 **Connect Claude Code:**
 ```
@@ -108,7 +129,7 @@ claude mcp add --transport http gethookd http://localhost:3001/mcp --header "Aut
 ```
 
 **Size budget** (characters of the JSON a tool returns, about 4 per token; enforced by `mcp/test/budget.test.ts` with worst-case copy):
-- `search_ads`: one result is at most 600 characters (about 150 tokens). That covers id, brand, headline (120 chars), body (160 chars), niche, format, status, dates, days_active and `impression_rank_in_brand`. If quotes or emoji would push a result over, the copy is cut further. A page is 10 results by default and 25 at most, so at most 20,000 characters including the echoed filters and cursor.
+- `search_ads`: one result is at most 600 characters (about 150 tokens). That covers id, brand, headline (120 chars), body (160 chars), niche, format, status, dates, days_active, `impression_rank_in_brand` and up to 10 country codes (there is no country filter, so results carry countries; see MCP_EVAL.md). If quotes or emoji would push a result over, the copy is cut further. A page is 10 results by default and 25 at most, so at most 20,000 characters including the echoed filters and cursor.
 - **More:** `next_cursor` (send `{"cursor": …}` alone for the next page; the cursor keeps the page size, and the response says which), or `get_ad` for one ad in full.
 - `get_ad`: at most 3,500 characters for the whole response, with up to 2,000 characters of body text, plus countries, brand_id and discovered_at.
 - Cut text ends in "…". Control characters and runs of whitespace become one space.

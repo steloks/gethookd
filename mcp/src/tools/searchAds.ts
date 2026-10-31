@@ -7,9 +7,9 @@ export const searchAds: ToolDefinition = {
   title: 'Search ads',
   description: `Search the GetHookd ad library (ads that brands run, with their copy, niche, format, status and dates). Returns up to \`limit\` compact results (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}; about 150 tokens each) and a \`next_cursor\` for the next page.
 
-Use it to find ads by keyword, niche, format, status or start date. There is no brand filter: q searches the ad copy only, not brand names.
+Use it to find ads by keyword, niche, format, status or start date. There is no brand filter: q searches the ad copy only, not brand names. There is no country filter either: each result lists the countries it runs in, so to answer a country question, filter the results you got and say it is a sample of the pages you read. Do not call get_ad on each result to find its countries.
 Do not use it for:
-- one ad's full text or countries: call get_ad with the id.
+- one ad's full text: call get_ad with the id.
 - exact totals: no counts are returned; page with the cursor if you must count, and say the number is what you saw.
 - ranking brands against each other: impression data only ranks ads WITHIN one brand (impression_rank_in_brand 1 = that brand's most-seen ad). It says nothing about which brand gets more impressions, and there is no spend, reach or click data. Say so instead of guessing.
 
@@ -95,7 +95,7 @@ All arguments are optional and combine with AND. Unknown argument names and inva
             : (nextCursor === null
                 ? 'This is the last page.'
                 : `More results: call search_ads with {"cursor": next_cursor} (it remembers the search${limit === undefined ? '' : ` and the page size of ${limit}`}).`) +
-              ' Call get_ad with an id for the full body text and countries.',
+              ' Call get_ad with an id for the full body text.',
       });
     });
   },

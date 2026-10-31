@@ -5,9 +5,9 @@ import { callV1, scalar, textResult, toQuery, type ToolDefinition } from './tool
 export const getAd: ToolDefinition = {
   name: 'get_ad',
   title: 'Get one ad',
-  description: `Every field of one ad, by the id from a search_ads result: full headline and body text (up to 2,000 characters), countries, brand_id, start and end dates, days_active, discovered_at and impression_rank_in_brand (1 = this brand's most-seen ad; not comparable across brands).
+  description: `Every field of one ad, by the id from a search_ads result: full headline and body text (up to 2,000 characters), all countries, brand_id, start and end dates, days_active, discovered_at and impression_rank_in_brand (1 = this brand's most-seen ad; not comparable across brands).
 
-Do not use it to search or browse: it needs an id you already have from search_ads.`,
+Do not use it to search or browse: it needs an id you already have from search_ads. Search results already include each ad's countries, so don't call it just for those.`,
   inputSchema: {
     type: 'object',
     properties: {

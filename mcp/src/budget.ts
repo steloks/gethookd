@@ -13,6 +13,8 @@ export const DEFAULT_LIMIT = 10;
 export const MAX_LIMIT = 25;
 export const PAGE_BUDGET = 20_000;
 export const AD_BUDGET = 3_500;
+/** Countries listed per search result (two-letter codes); get_ad lists up to 60. */
+export const RESULT_COUNTRIES = 10;
 /** What get_ad puts around the ad: {"today":"YYYY-MM-DD","ad":…}. */
 const AD_ENVELOPE = 64;
 
@@ -47,6 +49,11 @@ export function clip(text: string, max: number): string {
   return max <= 0 ? '' : `${chars.slice(0, max - 1).join('').trimEnd()}…`;
 }
 
+function countryCodes(countries: unknown, max: number): string[] {
+  // ISO-2 codes: cut to two characters, without the "…" clip() would add.
+  return (Array.isArray(countries) ? countries : []).slice(0, max).map((c) => Array.from(String(c).replace(/[\p{Cc}\s]+/gu, '')).slice(0, 2).join(''));
+}
+
 /** Longest headline, body and brand tried in turn until a result fits its budget. */
 const RESULT_STEPS: Array<[headline: number, body: number, brand: number]> = [
   [120, 160, 60],
@@ -72,6 +79,9 @@ export function compactAd(ad: V1Ad): Record<string, unknown> {
       ...(ad.end_date === null ? {} : { end_date: ad.end_date }),
       days_active: ad.days_active,
       impression_rank_in_brand: ad.impression_rank,
+      // There is no country filter, so the countries are here: a model can filter a page itself
+      // instead of calling get_ad for every result.
+      countries: countryCodes(ad.countries, RESULT_COUNTRIES),
     };
     if (JSON.stringify(result).length <= RESULT_BUDGET) {
       break;
@@ -101,7 +111,7 @@ export function fullAd(ad: V1Ad): Record<string, unknown> {
       end_date: ad.end_date,
       days_active: ad.days_active,
       impression_rank_in_brand: ad.impression_rank,
-      countries: (Array.isArray(ad.countries) ? ad.countries : []).slice(0, 60).map((c) => clip(c, 2)),
+      countries: countryCodes(ad.countries, 60),
       discovered_at: ad.discovered_at,
     };
     if (JSON.stringify(result).length <= AD_BUDGET - AD_ENVELOPE) {
