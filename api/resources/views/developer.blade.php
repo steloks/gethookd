@@ -9,6 +9,6 @@
     @vite(['resources/css/app.css', 'resources/js/developer/main.tsx'])
 </head>
 <body class="bg-slate-50 text-slate-900 antialiased">
-    <div id="developer-page"></div>
+    <div id="developer-page" data-mcp-url="{{ config('app.mcp_url') }}"></div>
 </body>
 </html>

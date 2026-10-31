@@ -8,6 +8,7 @@
  *   php laravel.php setup <key name>...   fresh schema, 30 ads, one search:read key per name; prints {"name": "ghk_…"}
  *   php laravel.php revoke <prefix>       revokes the key with that visible prefix
  *   php laravel.php billed <prefix>       prints {"total": n, "mcp": n}: billable calls of that key
+ *   php laravel.php mcp-call <prefix>     prints {"last_mcp_call_at": …}: when that key last came through MCP
  */
 
 use App\Auth\ApiKeys;
@@ -58,6 +59,11 @@ switch ($command) {
             ->join('personal_access_tokens', 'personal_access_tokens.id', '=', 'billable_calls.token_id')
             ->where('personal_access_tokens.prefix', $args[0]);
         echo json_encode(['total' => (clone $calls)->count(), 'mcp' => (clone $calls)->where('client', 'mcp')->count()]);
+        break;
+
+    case 'mcp-call':
+        $at = PersonalAccessToken::query()->where('prefix', $args[0])->value('last_mcp_call_at');
+        echo json_encode(['last_mcp_call_at' => $at]);
         break;
 
     default:

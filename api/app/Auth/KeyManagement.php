@@ -153,6 +153,7 @@ final class KeyManagement
             'scopes' => array_values($key->abilities ?? []),
             'created_at' => $key->created_at?->utc()->toIso8601ZuluString(),
             'last_used_at' => $key->last_used_at?->utc()->toIso8601ZuluString(),
+            'last_mcp_call_at' => $key->last_mcp_call_at?->utc()->toIso8601ZuluString(),
             'revoked_at' => $key->revoked_at?->utc()->toIso8601ZuluString(),
             'billable_calls_this_period' => $billableCallsThisPeriod,
         ];

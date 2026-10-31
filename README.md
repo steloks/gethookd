@@ -118,6 +118,14 @@ The MCP server calls v1, so `search_ads` and `get_ad` are billed through these; 
 
 - **Usage this month:** billable calls against the 1,000 quota, as the meter counts them (`/developer/usage`), split REST/MCP, with the reset time. The bar turns amber from 80% (the exact share: 799 of 1,000 is still green) and red when used up, with a warning that searches are refused until the reset. "This month" is a UTC calendar month. Times are shown in the reader's time zone, with the zone named (e.g. "Nov 1, 2026, 1:00 PM GMT+13" for the UTC-midnight reset).
 - **Create a key:** a name and scopes (default `search:read`). The new key is shown once, in a panel with a copy button. If the browser blocks the clipboard, the page says so and the key stays selectable. The key lives only in the page's memory until "I've stored it", never in storage or the URL. API problems are shown as the API words them, with suggested fixes.
+- **Connect your AI tool (Claude Code):** three steps.
+  1. One button creates a `search:read` key named "Claude Code".
+  2. The panel shows the one command to paste, with that key and the MCP server's address (`MCP_PUBLIC_URL`) filled in, and a copy button.
+  3. It suggests a first question.
+
+  It then checks every 3 seconds until the key's first call through the MCP server arrives, and says "Claude Code is connected". After 10 minutes with no call, it lists what to check (`claude mcp list`, `make up`) and offers "Check again". The key is in the command only until "Done".
+  - **How the check works:** the API notes `last_mcp_call_at` on a key whenever an authenticated v1 request carries `X-Client: mcp`, which the MCP server sends. Free and refused calls count too (a first `list_niches` is enough). It is written at most once a minute per key, and listed with the key.
+  - The header is self-declared, so it is used only for this check and the REST/MCP split, never for billing.
 - **Your keys:** name, prefix, scopes, created, last used ("Never" until first use), calls this month. Revoking asks for confirmation inline and says the key stops on its very next request. Revoked keys stay listed as revoked.
 - **Writes** send the CSRF token from the page. The page has a `no-referrer` referrer policy (a meta tag), so its URL is never sent to other sites.
 - **Robustness:**
@@ -173,10 +181,11 @@ A Node 22 / TypeScript MCP server over Streamable HTTP at `http://localhost:3001
 
 **Run it:** `make up` starts it at `http://localhost:3001/mcp`. Without Docker: `php artisan serve` in `api/`, then `cd mcp && npm install && npm start`. Settings, all optional: `MCP_PORT` (3001), `MCP_HOST` (127.0.0.1), `V1_BASE_URL` (http://127.0.0.1:8000), `V1_TIMEOUT_MS` (10000), `MCP_ALLOWED_HOSTS` (localhost and 127.0.0.1 on the port).
 
-**Connect Claude Code:**
+**Connect Claude Code:** the developer page's "Connect your AI tool" panel creates a key and gives this command with it filled in, then confirms the first call arrived. By hand:
 ```
 claude mcp add --transport http gethookd http://localhost:3001/mcp --header "Authorization: Bearer <your ghk_ key>"
 ```
+Other MCP clients that speak Streamable HTTP take the same URL and header.
 
 **Size budget** (characters of the JSON a tool returns, about 4 per token; enforced by `mcp/test/budget.test.ts` with worst-case copy):
 - `search_ads`: one result is at most 600 characters (about 150 tokens). That covers id, brand, headline (120 chars), body (160 chars), niche, format, status, dates, days_active, `impression_rank_in_brand` and up to 10 country codes (there is no country filter, so results carry countries; see MCP_EVAL.md). If quotes or emoji would push a result over, the copy is cut further. A page is 10 results by default and 25 at most, so at most 20,000 characters including the echoed filters and cursor.

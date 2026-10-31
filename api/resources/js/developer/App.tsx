@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiProblem, type ApiKey, type CreatedKey, type Usage } from './api';
+import { ConnectPanel } from './components/ConnectPanel';
 import { CreateKeyForm } from './components/CreateKeyForm';
 import { KeyList } from './components/KeyList';
 import { NewKeySecret } from './components/NewKeySecret';
 import { ProblemMessage } from './components/ProblemMessage';
 import { UsagePanel } from './components/UsagePanel';
 
-export function App() {
+export function App({ mcpUrl }: { mcpUrl: string }) {
     const [keys, setKeys] = useState<ApiKey[] | null>(null);
     const [usage, setUsage] = useState<Usage | null>(null);
     const [loadProblem, setLoadProblem] = useState<ApiProblem | null>(null);
@@ -56,6 +57,8 @@ export function App() {
                     }}
                 />
             )}
+
+            <ConnectPanel mcpUrl={mcpUrl} onKeyCreated={refresh} />
 
             <KeyList keys={keys} onChanged={refresh} />
         </main>

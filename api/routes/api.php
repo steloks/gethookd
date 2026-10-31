@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\V1\KeyController as V1KeyController;
 use App\Http\Controllers\Api\V1\NicheController as V1NicheController;
 use App\Http\Middleware\MeterBillableCall;
 use App\Http\Middleware\RateLimitPerKey;
+use App\Http\Middleware\RecordMcpCall;
 use App\Http\Middleware\RejectQueryParameters;
 use Illuminate\Support\Facades\Route;
 
@@ -20,7 +21,8 @@ Route::prefix('v0')->middleware(['auth:sanctum', RateLimitPerKey::class, 'abilit
 });
 
 // v1: key from Authorization: Bearer only. Errors use the shape in App\Support\Errors.
-Route::prefix('v1')->middleware(['auth:sanctum', RateLimitPerKey::class])->group(function () {
+// RecordMcpCall notes calls from the MCP server on the key (for the developer page's connect check).
+Route::prefix('v1')->middleware(['auth:sanctum', RecordMcpCall::class, RateLimitPerKey::class])->group(function () {
     Route::middleware('abilities:'.ApiScope::SearchRead->value)->group(function () {
         // Billable endpoints (README, "Billing"); /niches is free.
         Route::get('ads', [V1AdController::class, 'index'])->middleware(MeterBillableCall::class.':v1.ads.search');

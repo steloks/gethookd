@@ -18,6 +18,7 @@ export interface ApiKey {
     scopes: Scope[];
     created_at: string;
     last_used_at: string | null;
+    last_mcp_call_at: string | null;
     revoked_at: string | null;
     billable_calls_this_period: number;
 }

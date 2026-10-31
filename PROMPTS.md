@@ -838,3 +838,25 @@ Log of the important prompts used during this assessment. Add an entry per task,
 **Verification:**
 - Vitest: 22 passed (3 runs, plus a run under de_DE / NZ time); tsc clean.
 - Mutations: 13 new ones run, 13 caught (one renames a required field in `openapi/v1.yaml`). The original 14 page mutations were rerun, and all are still caught.
+
+## 32. "Connect your AI tool" panel (Claude Code)
+
+**Prompt:** "How are you going to connect the AI tool", then "yes go with claude code".
+
+**What was built:**
+- **API:**
+  - `personal_access_tokens.last_mcp_call_at` (migration).
+  - `RecordMcpCall` middleware on v1 (after auth, before the rate limit): any authenticated request with `X-Client: mcp` sets it, at most once a minute per key. Free, refused and rate-limited calls count.
+  - Listed with each key, and documented in the OpenAPI `ApiKey` schema (now required). `MCP_PUBLIC_URL` is passed to the page through a data attribute.
+- **Page:** `ConnectPanel`.
+  - Create a "Claude Code" `search:read` key, then the `claude mcp add --transport http …` command with the key and URL filled in, plus copy. Then a suggested first question.
+  - Polls the key list every 3 s until that key's `last_mcp_call_at` appears, then "connected" and polling stops.
+  - After 10 minutes: troubleshooting and "Check again". "Done" drops the key from memory.
+- The test fake moved to `test/fakeServer.ts`, still checked against the OpenAPI schemas. The fixtures needed `last_mcp_call_at` once the schema required it, which is the M2 check doing its job.
+
+**Verification:**
+- Pest: 8 new tests (MCP vs REST header, case, revoked and missing keys, the once-a-minute boundary, rate-limited, scope-less, listed).
+- MCP end-to-end: a real `list_niches` through the MCP server sets the key's `last_mcp_call_at` and bills nothing.
+- Page: 8 panel tests (command and copy, waiting → connected → polling stops, only its own key counts, a failed check retries, timeout and check again, Done forgets the key, create error, configured URL).
+- Mutations: 7 run on the API side and 9 on the page, 16 caught.
+- `make test` in the containers: 561 Pest, 30 page, 103 MCP unit and 6 MCP end-to-end tests passed.

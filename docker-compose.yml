@@ -47,6 +47,7 @@ services:
     environment:
       <<: *app-env
       # PHP's built-in server with a few workers: enough for local use, the page and the MCP server.
+      MCP_PUBLIC_URL: http://localhost:${MCP_HOST_PORT:-3001}/mcp
       PHP_CLI_SERVER_WORKERS: "4"
     command: ["sh", "-c", "php artisan migrate --force && exec php artisan serve --host=0.0.0.0 --port=8000 --no-reload"]
     ports:

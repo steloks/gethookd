@@ -10,6 +10,7 @@ use Laravel\Sanctum\PersonalAccessToken as SanctumPersonalAccessToken;
  *
  * @property string|null $prefix
  * @property CarbonImmutable|null $revoked_at
+ * @property CarbonImmutable|null $last_mcp_call_at
  */
 class PersonalAccessToken extends SanctumPersonalAccessToken
 {
@@ -24,6 +25,7 @@ class PersonalAccessToken extends SanctumPersonalAccessToken
     {
         return [
             'revoked_at' => 'immutable_datetime',
+            'last_mcp_call_at' => 'immutable_datetime',
         ];
     }
 

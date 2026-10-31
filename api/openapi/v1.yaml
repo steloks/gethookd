@@ -409,7 +409,7 @@ components:
       type: object
       description: An API key as listed. The key itself is never shown after it is created.
       additionalProperties: false
-      required: [id, name, prefix, scopes, created_at, last_used_at, revoked_at, billable_calls_this_period]
+      required: [id, name, prefix, scopes, created_at, last_used_at, last_mcp_call_at, revoked_at, billable_calls_this_period]
       properties:
         id:
           type: integer
@@ -434,6 +434,14 @@ components:
           format: date-time
           nullable: true
           description: The last request made with this key, refused ones included. Null if never used.
+        last_mcp_call_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            The last request made with this key through the MCP server (it sends `X-Client: mcp`),
+            to within a minute. Null until the first one. Used to confirm an AI tool is connected;
+            never for billing.
         revoked_at:
           type: string
           format: date-time

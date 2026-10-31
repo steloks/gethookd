@@ -70,6 +70,9 @@ return [
     // Host names the developer page answers on (it has no login; see App\Http\Middleware\LocalHostOnly).
     'developer_hosts' => env('DEVELOPER_HOSTS', 'localhost,127.0.0.1'),
 
+    // Where users' AI tools reach the MCP server; the developer page puts it in the connect command.
+    'mcp_url' => env('MCP_PUBLIC_URL', 'http://localhost:3001/mcp'),
+
     /*
     |--------------------------------------------------------------------------
     | Application Locale Configuration

@@ -32,6 +32,7 @@ const env = {
 const laravel = (...args: string[]) => execFileSync('php', [script, ...args], { env, encoding: 'utf8' });
 const prefix = (key: string) => key.slice(0, 12);
 const billed = (key: string): { total: number; mcp: number } => JSON.parse(laravel('billed', prefix(key)));
+const lastMcpCall = (key: string): string | null => JSON.parse(laravel('mcp-call', prefix(key))).last_mcp_call_at;
 
 let php: ChildProcess;
 let proxy: HttpServer;
@@ -61,7 +62,7 @@ async function connect(key: string): Promise<Client> {
 const rest = (path: string, key: string) => fetch(`${apiUrl}${path}`, { headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' } });
 
 beforeAll(async () => {
-  keys = JSON.parse(laravel('setup', 'billing', 'revoke', 'limit', 'retry'));
+  keys = JSON.parse(laravel('setup', 'billing', 'revoke', 'limit', 'retry', 'connect'));
 
   const port = await freePort();
   apiUrl = `http://127.0.0.1:${port}`;
@@ -124,6 +125,16 @@ describe('MCP on the real API', () => {
     expect(ad.ad.id).toBe(search.results[0].id);
 
     expect(billed(keys.billing!)).toEqual({ total: 2, mcp: 2 });
+  });
+
+  it('marks the key as connected on its first MCP call, even a free one (the developer page\'s check)', async () => {
+    expect(lastMcpCall(keys.connect!)).toBeNull();
+    const client = await connect(keys.connect!);
+
+    await client.callTool({ name: 'list_niches', arguments: {} });
+
+    expect(lastMcpCall(keys.connect!)).not.toBeNull();
+    expect(billed(keys.connect!)).toEqual({ total: 0, mcp: 0 });
   });
 
   it('passes v1\'s did-you-mean through as corrected_arguments', async () => {

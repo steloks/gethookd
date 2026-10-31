@@ -7,7 +7,7 @@ it('serves the developer page with a CSRF token for its writes', function () {
 
     $this->get('/developer')
         ->assertOk()
-        ->assertSee('<div id="developer-page"></div>', escape: false)
+        ->assertSee('<div id="developer-page" data-mcp-url="http://localhost:3001/mcp"></div>', escape: false)
         ->assertSee('<meta name="csrf-token" content="'.csrf_token().'">', escape: false)
         ->assertSee('<meta name="referrer" content="no-referrer">', escape: false);
 });

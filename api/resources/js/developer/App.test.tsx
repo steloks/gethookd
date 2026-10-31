@@ -1,123 +1,9 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ApiKey, Usage } from './api';
 import { App } from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { assertMatchesSchema } from './test/openapi';
-
-const SECRET = 'ghk_' + 'A'.repeat(40) + '0123abcd';
-
-interface Sent {
-    method: string;
-    path: string;
-    headers: Record<string, string>;
-    body: unknown;
-}
-
-type Reply = (request: Sent) => Response | Promise<Response> | undefined;
-
-/**
- * An in-memory /developer/* that records every request the page sends. Every body it answers
- * with is checked against openapi/v1.yaml first, so the fixtures can't drift from the real API.
- */
-function fakeServer(initial: { keys?: ApiKey[]; usage?: Partial<Usage>; validate?: boolean } = {}) {
-    const keys: ApiKey[] = [...(initial.keys ?? [])];
-    const usage: Usage = {
-        period_start: '2026-10-01T00:00:00Z',
-        resets_at: '2026-11-01T00:00:00Z',
-        billable_calls: 82,
-        quota: 1000,
-        remaining: 918,
-        by_client: { rest: 2, mcp: 80 },
-        ...initial.usage,
-    };
-    const sent: Sent[] = [];
-    const replies: Reply[] = [];
-    const holds: Array<{ matches: (request: Sent) => boolean; gate: Promise<void> }> = [];
-    const json = (status: number, body: unknown, schema?: string) => {
-        if (initial.validate !== false) {
-            if (status >= 400) assertMatchesSchema('Error', body);
-            else if (schema) assertMatchesSchema(schema, body);
-        }
-        return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
-    };
-    const ok = (path: string, request: Sent): Response => {
-        if (request.method === 'GET' && path === '/developer/keys') {
-            if (initial.validate !== false) keys.forEach((key) => assertMatchesSchema('ApiKey', key));
-            return json(200, { data: structuredClone(keys) });
-        }
-        if (request.method === 'GET' && path === '/developer/usage') {
-            if (initial.validate !== false) assertMatchesSchema('Usage', usage);
-            return json(200, { data: { ...usage } });
-        }
-        if (request.method === 'POST' && path === '/developer/keys') {
-            const { name, scopes } = request.body as { name: string; scopes: ApiKey['scopes'] };
-            const key = apiKey({ id: 100 + keys.length, name, scopes, prefix: SECRET.slice(0, 12) });
-            keys.unshift(key);
-            return json(201, { data: key, secret: SECRET, note: 'This is the only time the full key is shown.' }, 'CreatedKey');
-        }
-        const revoke = /^\/developer\/keys\/(\d+)$/.exec(path);
-        if (request.method === 'DELETE' && revoke) {
-            const key = keys.find((k) => k.id === Number(revoke[1]))!;
-            key.revoked_at ??= '2026-10-31T12:00:00Z';
-            if (initial.validate !== false) assertMatchesSchema('ApiKey', key);
-            return json(200, { data: key });
-        }
-        return json(404, { error: { code: 'not_found', message: 'There is no such resource.', next_step: 'Check the path.', retryable: false } });
-    };
-
-    vi.stubGlobal(
-        'fetch',
-        vi.fn(async (path: string, init: RequestInit = {}) => {
-            const request: Sent = {
-                method: init.method ?? 'GET',
-                path,
-                headers: (init.headers ?? {}) as Record<string, string>,
-                body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined,
-            };
-            sent.push(request);
-            const held = holds.findIndex((hold) => hold.matches(request));
-            if (held !== -1) {
-                const { gate } = holds.splice(held, 1)[0]!;
-                const response = ok(path, request); // the state as of now, delivered later
-                await gate;
-                return response;
-            }
-            const special = await replies.shift()?.(request);
-            return special ?? ok(path, request);
-        }),
-    );
-
-    return {
-        sent,
-        keys,
-        json,
-        /** The next request gets this reply (undefined: the normal one). */
-        replyOnce: (reply: Reply) => replies.push(reply),
-        /** The next matching request is answered with the state as it is then, but only when released. */
-        hold(method: string, path: string) {
-            let release!: () => void;
-            const gate = new Promise<void>((resolve) => (release = resolve));
-            holds.push({ matches: (request) => request.method === method && request.path === path, gate });
-            return () => release();
-        },
-    };
-}
-
-function apiKey(overrides: Partial<ApiKey> = {}): ApiKey {
-    return {
-        id: 1,
-        name: 'laptop',
-        prefix: 'ghk_abcdefgh',
-        scopes: ['search:read'],
-        created_at: '2026-10-30T09:00:00Z',
-        last_used_at: null,
-        revoked_at: null,
-        billable_calls_this_period: 0,
-        ...overrides,
-    };
-}
+import { apiKey, fakeServer, SECRET } from './test/fakeServer';
 
 /** The row's cells by column header, so a swapped column fails. */
 function cellsOf(row: HTMLElement): Record<string, string> {
@@ -140,7 +26,7 @@ describe('key list', () => {
             ],
         });
 
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         expect(cellsOf(await screen.findByTestId('key-2'))).toEqual({
             Name: 'Claude Desktop',
@@ -157,7 +43,7 @@ describe('key list', () => {
     it('shows revoked keys as revoked, with when, and without a revoke button', async () => {
         fakeServer({ keys: [apiKey({ id: 3, revoked_at: '2026-10-29T10:00:00Z' })] });
 
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         const row = await screen.findByTestId('key-3');
         expect(cellsOf(row).Status).toBe('Revoked Oct 29, 2026, 10:00 AM UTC');
@@ -167,7 +53,7 @@ describe('key list', () => {
     it('says when there are no keys yet', async () => {
         fakeServer();
 
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         expect(await screen.findByText(/No keys yet/)).toBeInTheDocument();
     });
@@ -175,7 +61,7 @@ describe('key list', () => {
     it('shows a date it can\'t read as "—" instead of breaking the page', async () => {
         fakeServer({ keys: [apiKey({ id: 4, created_at: 'not a date' })], validate: false });
 
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         expect(cellsOf(await screen.findByTestId('key-4')).Created).toBe('—');
     });
@@ -185,7 +71,7 @@ describe('usage', () => {
     it('shows billable calls against the quota, from the meter, with the reset time in UTC', async () => {
         fakeServer();
 
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         const bar = await screen.findByRole('progressbar', { name: 'Billable calls used' });
         expect(bar).toHaveAttribute('aria-valuenow', '82');
@@ -202,7 +88,7 @@ describe('usage', () => {
     it('marks usage from 80% of the quota as high', async () => {
         fakeServer({ usage: { billable_calls: 800, remaining: 200 } });
 
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         expect((await screen.findByRole('progressbar')).firstChild).toHaveAttribute('data-level', 'high');
     });
@@ -210,7 +96,7 @@ describe('usage', () => {
     it('stays normal just under 80%', async () => {
         fakeServer({ usage: { billable_calls: 799, remaining: 201 } });
 
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         expect((await screen.findByRole('progressbar')).firstChild).toHaveAttribute('data-level', 'normal');
     });
@@ -218,7 +104,7 @@ describe('usage', () => {
     it('warns when the quota is used up, with the reset time, and caps the bar', async () => {
         fakeServer({ usage: { billable_calls: 1500, remaining: 0 } });
 
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent('quota is used up: searches are refused until Nov 1, 2026, 12:00 AM UTC');
         expect((screen.getByRole('progressbar').firstChild as HTMLElement).style.width).toBe('100%');
@@ -232,7 +118,7 @@ describe('creating a key', () => {
         const user = userEvent.setup();
         const writeText = vi.fn().mockResolvedValue(undefined);
         Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         await user.type(await screen.findByLabelText('Name'), 'Claude Desktop');
         await user.click(screen.getByRole('checkbox', { name: /keys:manage/ }));
@@ -259,7 +145,7 @@ describe('creating a key', () => {
     it('forgets the key once dismissed: it is not in the page, storage or the URL', async () => {
         fakeServer();
         const user = userEvent.setup();
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         await user.type(await screen.findByLabelText('Name'), 'laptop');
         await user.click(screen.getByRole('button', { name: 'Create key' }));
@@ -277,7 +163,7 @@ describe('creating a key', () => {
     it('creates one key however often the button is pressed while the first request runs', async () => {
         const server = fakeServer();
         const user = userEvent.setup();
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
         await user.type(await screen.findByLabelText('Name'), 'laptop');
         const release = server.hold('POST', '/developer/keys');
 
@@ -294,7 +180,7 @@ describe('creating a key', () => {
         fakeServer();
         const user = userEvent.setup();
         Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) }, configurable: true });
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         await user.type(await screen.findByLabelText('Name'), 'laptop');
         await user.click(screen.getByRole('button', { name: 'Create key' }));
@@ -307,7 +193,7 @@ describe('creating a key', () => {
     it('shows the API\'s problems with their suggested fixes, and no key', async () => {
         const server = fakeServer();
         const user = userEvent.setup();
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
         await user.type(await screen.findByLabelText('Name'), 'laptop');
         server.replyOnce(() =>
             server.json(422, {
@@ -333,7 +219,7 @@ describe('creating a key', () => {
     it('says to check the list when a create answers without the key', async () => {
         const server = fakeServer();
         const user = userEvent.setup();
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
         await user.type(await screen.findByLabelText('Name'), 'laptop');
         server.replyOnce(() => new Response('<html>proxy page</html>', { status: 200, headers: { 'Content-Type': 'text/html' } }));
 
@@ -350,7 +236,7 @@ describe('revoking a key', () => {
     it('asks to confirm, sends DELETE with the CSRF token, and shows the key as revoked', async () => {
         const server = fakeServer({ keys: [apiKey({ id: 7, prefix: 'ghk_seven777' })] });
         const user = userEvent.setup();
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         await user.click(await screen.findByRole('button', { name: 'Revoke' }));
         expect(server.sent.some((r) => r.method === 'DELETE')).toBe(false);
@@ -367,7 +253,7 @@ describe('revoking a key', () => {
     it('sends nothing when cancelled', async () => {
         const server = fakeServer({ keys: [apiKey({ id: 7 })] });
         const user = userEvent.setup();
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         await user.click(await screen.findByRole('button', { name: 'Revoke' }));
         await user.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -379,7 +265,7 @@ describe('revoking a key', () => {
     it('shows the error and the key\'s real state when revoking fails', async () => {
         const server = fakeServer({ keys: [apiKey({ id: 7, prefix: 'ghk_seven777' })] });
         const user = userEvent.setup();
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
         await user.click(await screen.findByRole('button', { name: 'Revoke' }));
         // Meanwhile the key was revoked elsewhere (another tab, or the API).
         server.keys[0]!.revoked_at = '2026-10-31T11:00:00Z';
@@ -394,7 +280,7 @@ describe('revoking a key', () => {
     it('keeps a revoked key revoked when an older refresh answers last', async () => {
         const server = fakeServer({ keys: [apiKey({ id: 7, prefix: 'ghk_seven777' })] });
         const user = userEvent.setup();
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
         await screen.findByTestId('key-7');
         await user.type(screen.getByLabelText('Name'), 'laptop');
         // The create's refresh reads the list while key 7 is still active, and answers last.
@@ -416,7 +302,7 @@ describe('loading', () => {
     it('says what to do when the API can\'t be reached', async () => {
         vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
 
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent('make up');
     });
@@ -425,7 +311,7 @@ describe('loading', () => {
         const server = fakeServer();
         server.replyOnce(() => new Response('<html>Server Error</html>', { status: 500, headers: { 'Content-Type': 'text/html' } }));
 
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent('Unexpected response (HTTP 500).');
     });
@@ -434,7 +320,7 @@ describe('loading', () => {
         const server = fakeServer();
         server.replyOnce(() => new Response('<html>proxy page</html>', { status: 200, headers: { 'Content-Type': 'text/html' } }));
 
-        render(<App />);
+        render(<App mcpUrl="http://localhost:3001/mcp" />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent('without the expected data');
     });
