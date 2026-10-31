@@ -61,6 +61,35 @@ Where the spec is ambiguous, this is what the code does and why.
 
 **Why fixed windows:** one Redis counter per key and minute, incremented and given an expiry in one Lua script, so concurrent requests can never both take the last slot (checked with 100 concurrent requests: exactly 60 succeeded). It is the simplest scheme to explain ("60 per clock minute"), costs one small key per active key, and gives an exact `Retry-After` for its own rule. The cost is the burst at a minute boundary: up to 120 requests within about a second. A sliding-window log would close that gap (at most 60 in *any* 60 seconds) at the cost of storing up to 60 timestamps per key, and a token bucket would smooth traffic to one request a second after a burst; either can replace `KeyRateLimiter` without touching its callers.
 
+### Billing (the billable-call rule)
+
+**A billable call** is a `GET` request with a valid key that returns 2xx with ad data, on one of:
+- v0 `GET /api/v0/ads`
+- v1 `GET /api/v1/ads` (search, every page)
+- v1 `GET /api/v1/ads/{id}`
+
+The MCP server calls v1, so `search_ads` and `get_ad` are billed through these; nothing is billed twice for one MCP call.
+
+**Never billable:**
+- `GET /api/v1/niches` (and MCP `list_niches`): reference data the tools tell agents to read first.
+- Any error: 4xx (including 422, which is us refusing to guess), 429 and 5xx.
+- `HEAD` requests (no ad data is returned).
+- Key management and usage endpoints.
+
+**When it is counted:** after the endpoint has produced its 2xx response and before the response is sent, as one row in `billable_calls`. If the row can't be written, the caller gets a 500 and no data. The quota, the developer page and any invoice all count these rows; there is no second counter.
+
+**`Idempotency-Key` (24 hours, per API key):**
+- Requests from the same API key with the same `Idempotency-Key` within 24 hours of the first billed one are billed once. The 24 hours are measured from that first billed call to the time the repeat arrives.
+- A repeat runs the request again (all endpoints are reads, and the data is live) and is not billed; the response says so in the `Billed: false` header. A billed response has `Billed: true`.
+- The key is bound to the request (method, path and query string). Sending a used key with a different request is a 422 `idempotency_key_reused`, so one constant key can't make every call free.
+- A request that fails (any error) doesn't use up its key; the next success with that key is billed.
+- Concurrent requests with the same key all run; exactly one is billed.
+- Format: 1–255 visible ASCII characters, sent once. On v1 an invalid key is a 422; on v0 it is ignored (v0 ignores invalid input) and the call is billed normally.
+
+**Monthly quota:** 1,000 billable calls per calendar month (UTC) per account, shared by all of its keys (the rate limit is per key). Over the quota, billable calls get a 429 `quota_exceeded`, which is not retryable and gives `resets_at` (the first instant of the next month) and a `Retry-After` until then. `/niches` and repeats of an already-billed `Idempotency-Key` still work, since they cost nothing. On v0 the quota error is v0's usual 400.
+
+**MCP retries:** the MCP server sends one `Idempotency-Key` per tool call, derived from the MCP session and the JSON-RPC request id, and reuses it when it retries v1 after a timeout or 5xx, or when the client re-sends the same message. A model deciding to call a tool again is a new tool call and is billed, like a REST client sending a new request: nothing distinguishes "retry" from "ask again" except the request id, and treating identical arguments as a retry would make deliberate repeats free.
+
 ### Errors
 
 - Every non-v0 error uses one shape: `{"error": {"code", "message", "next_step", "retryable", "details"?, "retry_after"?}}`. The codes are listed in `api/app/Support/Errors/ErrorCode.php`.

@@ -7,7 +7,7 @@ use RuntimeException;
 
 /**
  * An error in the one shape every non-v0 API response uses:
- * {"error": {"code", "message", "next_step", "retryable", "details"?, "retry_after"?}}.
+ * {"error": {"code", "message", "next_step", "retryable", "details"?, "retry_after"?, "resets_at"?}}.
  *
  * Throw it from anywhere in a request; the exception handler renders it.
  */
@@ -27,6 +27,7 @@ final class ApiError extends RuntimeException
         public readonly ?int $retryAfter = null,
         public readonly array $headers = [],
         public readonly array $details = [],
+        public readonly ?string $resetsAt = null,
     ) {
         parent::__construct($message ?? $errorCode->message());
     }
@@ -46,6 +47,10 @@ final class ApiError extends RuntimeException
 
         if ($this->retryAfter !== null) {
             $error['retry_after'] = $this->retryAfter;
+        }
+
+        if ($this->resetsAt !== null) {
+            $error['resets_at'] = $this->resetsAt;
         }
 
         return new JsonResponse(['error' => $error], $this->errorCode->status(), $this->headers);

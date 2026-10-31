@@ -50,7 +50,9 @@ function spec(string $pointer = ''): array
  */
 function searchParameters(): array
 {
-    return array_column(spec('paths/~1api~1v1~1ads/get')['parameters'], null, 'name');
+    $query = array_filter(spec('paths/~1api~1v1~1ads/get')['parameters'], fn (array $param) => ($param['in'] ?? null) === 'query');
+
+    return array_column($query, null, 'name');
 }
 
 it('is a valid OpenAPI 3 document', function () {
@@ -129,7 +131,23 @@ it('documents every parameter issue the API reports, and how many', function () 
         ->and(spec('components/schemas/Error/properties/error/properties/details')['maxItems'])->toBe(ApiError::MAX_DETAILS);
 });
 
-it('pins each documented error response to the code for its status', function () {
+/**
+ * Every error code a response schema allows (each variant of a oneOf pins its own).
+ *
+ * @param  array<mixed>  $schema
+ * @return list<string>
+ */
+function pinnedCodes(array $schema): array
+{
+    $codes = $schema['properties']['error']['properties']['code']['enum'] ?? [];
+    foreach ([...($schema['allOf'] ?? []), ...($schema['oneOf'] ?? [])] as $part) {
+        $codes = [...$codes, ...pinnedCodes($part)];
+    }
+
+    return $codes;
+}
+
+it('pins each documented error response to codes for its status', function () {
     foreach (spec('paths') as $path => $operations) {
         foreach ($operations as $method => $operation) {
             foreach ($operation['responses'] as $status => $response) {
@@ -137,13 +155,33 @@ it('pins each documented error response to the code for its status', function ()
                     continue;
                 }
                 $name = basename($response['$ref']);
-                $code = spec("components/responses/{$name}/content/application~1json/schema/allOf/1/properties/error/properties/code")['enum'];
+                $codes = pinnedCodes(spec("components/responses/{$name}/content/application~1json/schema"));
 
-                expect($code)->toHaveCount(1, "{$method} {$path} {$status}")
-                    ->and(ErrorCode::from($code[0])->status())->toBe($status, "{$method} {$path} {$status}");
+                expect($codes)->not->toBeEmpty("{$method} {$path} {$status}");
+                foreach ($codes as $code) {
+                    expect(ErrorCode::from($code)->status())->toBe($status, "{$method} {$path} {$status} {$code}");
+                }
             }
         }
     }
+});
+
+it('documents the Idempotency-Key header and the Billed header on exactly the billable operations', function () {
+    $billable = [];
+    foreach (spec('paths') as $path => $operations) {
+        foreach ($operations as $method => $operation) {
+            $refs = array_column($operation['parameters'] ?? [], '$ref');
+            if (in_array('#/components/parameters/IdempotencyKey', $refs, true)) {
+                expect($operation['responses']['200']['headers']['Billed']['$ref'] ?? null)->toBe('#/components/headers/Billed');
+                $billable[] = "{$method} {$path}";
+            } else {
+                expect($operation['responses']['200'])->not->toHaveKey('headers');
+            }
+        }
+    }
+
+    expect($billable)->toBe(['get /api/v1/ads', 'get /api/v1/ads/{id}'])
+        ->and(spec('components/parameters/IdempotencyKey/schema')['maxLength'])->toBe(255);
 });
 
 it('documents every error code in the registry', function () {
@@ -251,7 +289,11 @@ function brokenResponses(): array
         '422 with no problems' => ['GET', '/api/v1/ads', fn (bool $broken) => new JsonResponse($error('invalid_parameters', $broken ? ['details' => []] : $details), 422)],
         '429 without Retry-After' => ['GET', '/api/v1/niches', fn (bool $broken) => new JsonResponse($error('rate_limited', ['retry_after' => 5]), 429, $broken ? [] : ['Retry-After' => '5'])],
         '429 without retry_after' => ['GET', '/api/v1/niches', fn (bool $broken) => new JsonResponse($error('rate_limited', $broken ? [] : ['retry_after' => 5]), 429, ['Retry-After' => '5'])],
-        'applied niche not a slug' => ['GET', '/api/v1/ads', fn (bool $broken) => new JsonResponse($page($broken ? 'Skincare' : 'skincare'), 200)],
+        'applied niche not a slug' => ['GET', '/api/v1/ads', fn (bool $broken) => new JsonResponse($page($broken ? 'Skincare' : 'skincare'), 200, ['Billed' => 'true'])],
+        'billable 200 without Billed' => ['GET', '/api/v1/ads', fn (bool $broken) => new JsonResponse($page('skincare'), 200, $broken ? [] : ['Billed' => 'false'])],
+        'quota_exceeded without resets_at' => ['GET', '/api/v1/ads', fn (bool $broken) => new JsonResponse($error('quota_exceeded', $broken ? [] : ['resets_at' => '2026-11-01T00:00:00Z']), 429, ['Retry-After' => '100'])],
+        'quota_exceeded said to be retryable' => ['GET', '/api/v1/ads', fn (bool $broken) => new JsonResponse(['error' => ['code' => 'quota_exceeded', 'message' => 'm', 'next_step' => 'n', 'retryable' => $broken, 'resets_at' => '2026-11-01T00:00:00Z']], 429, ['Retry-After' => '100'])],
+        'idempotency_key_reused on niches' => ['GET', '/api/v1/niches', fn (bool $broken) => new JsonResponse($error($broken ? 'idempotency_key_reused' : 'invalid_parameters', $details), 422)],
         'success on an undocumented v1 path' => ['GET', '/api/v1/other', fn (bool $broken) => new JsonResponse($error('not_found'), $broken ? 200 : 404)],
         'error on an undocumented v1 path, with an extra field' => ['GET', '/api/v1/other', fn (bool $broken) => new JsonResponse($error('not_found', $broken ? ['trace' => 'x'] : []), 404)],
         'error on an undocumented method, with a bad retry_after' => ['POST', '/api/v1/ads', fn (bool $broken) => new JsonResponse($error('rate_limited', ['retry_after' => $broken ? 0 : 5]), 429)],

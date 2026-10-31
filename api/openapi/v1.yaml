@@ -110,8 +110,12 @@ paths:
             type: string
             minLength: 1
             maxLength: 4096
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
         '200':
+          headers:
+            Billed:
+              $ref: '#/components/headers/Billed'
           description: One page of matching ads.
           content:
             application/json:
@@ -122,9 +126,9 @@ paths:
         '403':
           $ref: '#/components/responses/InsufficientScope'
         '422':
-          $ref: '#/components/responses/InvalidParameters'
+          $ref: '#/components/responses/InvalidRequest'
         '429':
-          $ref: '#/components/responses/RateLimited'
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           $ref: '#/components/responses/InternalError'
         default:
@@ -144,8 +148,12 @@ paths:
           schema:
             type: string
           example: '1042'
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
         '200':
+          headers:
+            Billed:
+              $ref: '#/components/headers/Billed'
           description: The ad.
           content:
             application/json:
@@ -163,9 +171,9 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '422':
-          $ref: '#/components/responses/InvalidParameters'
+          $ref: '#/components/responses/InvalidRequest'
         '429':
-          $ref: '#/components/responses/RateLimited'
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           $ref: '#/components/responses/InternalError'
         default:
@@ -216,6 +224,34 @@ components:
         Each key may make 60 requests per clock minute (12:00:00–12:00:59, then 12:01:00–…), shared
         by v0, v1 and the MCP server. Every request with a valid key counts, including ones refused
         for their scope or parameters. Over the limit: 429 `rate_limited` with `retry_after`.
+
+        Billing: a successful GET of /api/v1/ads or /api/v1/ads/{id} (or v0 /api/v0/ads) is one
+        billable call; /api/v1/niches and every error are free. An account has 1,000 billable calls
+        per calendar month (UTC); over it, those endpoints answer 429 `quota_exceeded` until
+        `resets_at`.
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: |
+        Makes retries free: requests from the same API key with the same Idempotency-Key within 24 hours
+        of the first billed one are billed once. A repeat runs again (fresh data) and answers `Billed: false`.
+        The key is bound to its request (method, path and query): sending it with a different request is a
+        422 `idempotency_key_reused`. Use a new key, e.g. a UUID, for every new request.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+        pattern: '^[\x21-\x7E]+$'
+
+  headers:
+    Billed:
+      required: true
+      description: '`true` if this call was billed, `false` if it repeated an already-billed Idempotency-Key.'
+      schema:
+        type: string
+        enum: ['true', 'false']
 
   schemas:
     Ad:
@@ -348,7 +384,7 @@ components:
           properties:
             code:
               type: string
-              enum: [bad_request, unauthenticated, insufficient_scope, forbidden, not_found, method_not_allowed, invalid_parameters, rate_limited, internal_error, unavailable]
+              enum: [bad_request, unauthenticated, insufficient_scope, forbidden, not_found, method_not_allowed, invalid_parameters, idempotency_key_reused, rate_limited, quota_exceeded, internal_error, unavailable]
             message:
               type: string
               description: What went wrong, for a person or a model.
@@ -362,6 +398,10 @@ components:
               type: integer
               minimum: 1
               description: Seconds to wait before retrying (also in the Retry-After header).
+            resets_at:
+              type: string
+              format: date-time
+              description: When the monthly quota resets (`quota_exceeded`).
             details:
               type: array
               maxItems: 10
@@ -435,7 +475,7 @@ components:
                       code:
                         enum: [not_found]
     InvalidParameters:
-      description: Unknown, repeated or invalid query parameters (`invalid_parameters`), each listed in `details`.
+      description: Unknown, repeated or invalid query parameters or Idempotency-Key header (`invalid_parameters`), each listed in `details`.
       content:
         application/json:
           schema:
@@ -449,6 +489,31 @@ components:
                         enum: [invalid_parameters]
                       details:
                         minItems: 1
+    InvalidRequest:
+      description: |
+        `invalid_parameters`: unknown, repeated or invalid query parameters or Idempotency-Key header, each listed in `details`.
+        `idempotency_key_reused`: the Idempotency-Key was already billed for a different request; send a new key.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - allOf:
+                  - $ref: '#/components/schemas/Error'
+                  - properties:
+                      error:
+                        required: [details]
+                        properties:
+                          code:
+                            enum: [invalid_parameters]
+                          details:
+                            minItems: 1
+              - allOf:
+                  - $ref: '#/components/schemas/Error'
+                  - properties:
+                      error:
+                        properties:
+                          code:
+                            enum: [idempotency_key_reused]
     RateLimited:
       description: The key has used its 60 requests for this clock minute (`rate_limited`, retryable). Wait `retry_after` seconds, the time until the minute ends, then send the same request again.
       headers:
@@ -472,6 +537,41 @@ components:
                         enum: [rate_limited]
                       retry_after:
                         maximum: 60
+    TooManyRequests:
+      description: |
+        `rate_limited` (retryable): the key has used its 60 requests for this clock minute. Wait `retry_after` seconds, then send the same request again.
+        `quota_exceeded` (not retryable): the account has used its 1,000 billable calls for this calendar month (UTC). Do not retry before `resets_at`. /api/v1/niches still works, and so do repeats of an already-billed Idempotency-Key.
+      headers:
+        Retry-After:
+          required: true
+          description: Seconds until the limit or the quota resets.
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - allOf:
+                  - $ref: '#/components/schemas/Error'
+                  - properties:
+                      error:
+                        required: [retry_after]
+                        properties:
+                          code:
+                            enum: [rate_limited]
+                          retry_after:
+                            maximum: 60
+              - allOf:
+                  - $ref: '#/components/schemas/Error'
+                  - properties:
+                      error:
+                        required: [resets_at]
+                        properties:
+                          code:
+                            enum: [quota_exceeded]
+                          retryable:
+                            enum: [false]
     InternalError:
       description: An unexpected failure on our side (`internal_error`, retryable).
       content:

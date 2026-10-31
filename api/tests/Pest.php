@@ -26,6 +26,10 @@ pest()->extend(TestCase::class)
     ->use(RefreshDatabase::class)
     ->in('Feature');
 
+// Real concurrent requests against a running server: the data must be committed, so these tests
+// migrate the test database fresh before and after each test instead of using a transaction.
+pest()->extend(TestCase::class)->in('Concurrency');
+
 /*
 |--------------------------------------------------------------------------
 | Expectations
@@ -64,11 +68,14 @@ function v1Key(array $scopes = [ApiScope::SearchRead]): string
  * A v1 request with the key as a Bearer header, as a real client sends it. The response is checked
  * against openapi/v1.yaml, so every test that calls v1 also tests the OpenAPI document.
  */
-function v1(string $method, string $uri, ?string $key = null): TestResponse
+/**
+ * @param  array<string, string>  $headers  more request headers, e.g. Idempotency-Key
+ */
+function v1(string $method, string $uri, ?string $key = null, array $headers = []): TestResponse
 {
     // The test client reuses one app; a real request starts with fresh guards.
     app('auth')->forgetGuards();
-    $headers = $key === null ? [] : ['Authorization' => "Bearer {$key}"];
+    $headers = ($key === null ? [] : ['Authorization' => "Bearer {$key}"]) + $headers;
 
     $response = test()->json($method, $uri, [], $headers);
     OpenApi::assertMatches($response, $method, $uri, $headers);
@@ -90,10 +97,10 @@ function spendRateLimit(string $key, int $count = KeyRateLimiter::LIMIT): void
 /**
  * The one error shape: exactly these fields (details and retry_after only where the error uses them), with the code's registry values.
  */
-function assertApiError(TestResponse $response, ErrorCode $code, bool $withDetails = false, bool $withRetryAfter = false): void
+function assertApiError(TestResponse $response, ErrorCode $code, bool $withDetails = false, bool $withRetryAfter = false, bool $withResetsAt = false): void
 {
     $response->assertStatus($code->status());
-    $fields = ['code', 'message', 'next_step', 'retryable', ...($withDetails ? ['details'] : []), ...($withRetryAfter ? ['retry_after'] : [])];
+    $fields = ['code', 'message', 'next_step', 'retryable', ...($withDetails ? ['details'] : []), ...($withRetryAfter ? ['retry_after'] : []), ...($withResetsAt ? ['resets_at'] : [])];
     expect($response->json())->toHaveKey('error')->toHaveCount(1)
         ->and(array_keys($response->json('error')))->toBe($fields)
         ->and($response->json('error.code'))->toBe($code->value)

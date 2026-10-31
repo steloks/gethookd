@@ -230,7 +230,9 @@ describe('error code registry', function () {
             'not_found' => 404,
             'method_not_allowed' => 405,
             'invalid_parameters' => 422,
+            'idempotency_key_reused' => 422,
             'rate_limited' => 429,
+            'quota_exceeded' => 429,
             'internal_error' => 500,
             'unavailable' => 503,
         ]);

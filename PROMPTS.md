@@ -596,3 +596,40 @@ Log of the important prompts used during this assessment. Add an entry per task,
 **Verification:**
 - Mutations: 16 run, 16 caught. The first run missed "round down instead of up", because the test sat at 59.4 s where both give 1. It was moved to 30.4 s, with a retry at 29 s (refused) and 30 s (allowed).
 - Smoke: 100 concurrent requests (v0 and v1 mixed, one key, `artisan serve` with 16 workers) gave exactly 60 × 200 and 40 × 429, with `Retry-After` matching the seconds left in the minute. The key was deleted afterwards.
+
+## 21. Billing: metering, Idempotency-Key, quota (Part 3, step 2)
+
+**Prompt:** "what is the billable rule in the task?", "what rules do u suggest", then "yes go on, implement it".
+
+**What changed:**
+- The rule was written first: README "Billing" and a new `DESIGN.md` (billing and rate-limit decisions).
+- Migration `billable_calls` (the one meter) and `idempotency_keys` (unique per API key and key, with the request fingerprint and `expires_at`).
+- `App\Billing\Meter`:
+  - `usage()` counts an account's rows in the UTC calendar month.
+  - `bill()` runs in one transaction: lock the account's `users` row, claim the key (`INSERT … ON CONFLICT … DO UPDATE … WHERE expired`), check the quota, insert the row. A quota refusal rolls the claim back.
+- `MeterBillableCall` middleware on v0 `/ads`, v1 `/ads` and v1 `/ads/{id}`, GET only.
+  - Before the endpoint: validate `Idempotency-Key`; refuse a billed key sent with another request; refuse when over quota, unless it repeats a billed key.
+  - After a 2xx: bill, and set `Billed: true|false`.
+  - `X-Client: mcp` is recorded and has no effect on billing.
+- New error codes `idempotency_key_reused` (422) and `quota_exceeded` (429, not retryable, with `resets_at` and `Retry-After`). v0 renders both as its usual 400.
+- OpenAPI:
+  - an `Idempotency-Key` header parameter and a required `Billed` response header on the billable operations;
+  - 422 and 429 responses as `oneOf` per code, with `quota_exceeded` pinned to `retryable: false` and `resets_at` required.
+  - The pins test follows `oneOf`; a parity test checks that exactly the billable operations document both headers.
+- Tests:
+  - `tests/Feature/Billing/MeterTest.php` (33 tests): every billable and free case, idempotency (repeat, re-run, 24-hour boundary, other request, failed request, per API key, header format on v1 vs v0), the quota (edge, free calls over quota, shared by an account's keys, per account, month reset, refused before running), and a meter that can't be written gives a 500 with no data.
+  - `tests/Concurrency/BillingConcurrencyTest.php`, a new suite that `make test` will run: it starts `php -S` with 8 workers on the test database and fires parallel requests.
+    - A mix of 45 calls bills exactly 26.
+    - 20 calls against 995 used bill exactly 5 and refuse 15 with `quota_exceeded`.
+    - 12 calls sharing one key with two different requests bill exactly 1.
+
+**Problems found while building the concurrency test:**
+- The server was started from the wrong directory, so every request got a PHP warning page with status 200. The test failed, as it should. Fixed by starting it in `public/`, like `artisan serve`; the readiness check now waits for the API's own 401.
+- `php -S` workers outlive the main process, which left 8 orphans and hung the run. Fixed by stopping the workers first (`pkill -P`).
+
+**Verification:**
+- Mutations: 25 run, 23 caught at first.
+  - "Quota checked with `>`" inside the transaction only shows under concurrency; it is caught by the concurrency suite.
+  - "No quota check before running" was covered by the in-transaction check. A test now shows that an over-quota call is refused before it runs (an invalid search gets `quota_exceeded`, and the search never queries).
+  - Removing the account lock is caught by the concurrency quota test.
+- The concurrency suite passed 5 runs in a row, with no server processes left. Full suite passed; Pint clean.
