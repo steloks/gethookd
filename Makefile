@@ -3,13 +3,14 @@ COMPOSE := docker compose
 API := $(COMPOSE) exec -T api
 NAME ?= dev
 
-.PHONY: up down logs ingest seed key test test-api test-mcp
+.PHONY: up down logs ingest seed key test test-api test-web test-mcp
 
 ## Build and start everything (Postgres, Redis, API, MCP server), migrate, and seed an empty database.
 up: .env
 	$(COMPOSE) up -d --build --wait
 	$(API) php artisan db:seed-if-empty
 	@echo ""
+	@echo "Keys page:  http://localhost:$${API_HOST_PORT:-8000}/developer"
 	@echo "API:        http://localhost:$${API_HOST_PORT:-8000}/api/v1/ads"
 	@echo "MCP server: http://localhost:$${MCP_HOST_PORT:-3001}/mcp"
 	@echo "Create an API key:  make key"
@@ -37,11 +38,15 @@ seed:
 key:
 	$(API) php artisan keys:create "$(NAME)"
 
-test: test-api test-mcp
+test: test-api test-web test-mcp
 
 ## Pest (unit, feature and concurrency suites; serial, because tests share Redis database 15) against the test database.
 test-api:
 	$(API) ./vendor/bin/pest
+
+## The developer page's tests (Vitest + Testing Library, in jsdom).
+test-web:
+	$(API) npm test
 
 ## Vitest unit tests, then the end-to-end tests against the real API on the test database.
 test-mcp:

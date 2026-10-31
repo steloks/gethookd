@@ -30,7 +30,7 @@ return Application::configure(basePath: dirname(__DIR__))
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
-            fn (Request $request) => $request->is('api/*', 'developer/*') || $request->expectsJson(),
+            fn (Request $request) => $request->is('api/*', 'developer', 'developer/*') || $request->expectsJson(),
         );
 
         // A thrown ApiError is a client error the response already explains, not something to log.
@@ -49,7 +49,7 @@ return Application::configure(basePath: dirname(__DIR__))
 
             // Every other API path (v1, and unknown ones such as /api/v2) uses the one error shape,
             // and so do the developer page's JSON endpoints.
-            if ($request->is('api/*', 'developer/*')) {
+            if ($request->is('api/*', 'developer', 'developer/*')) {
                 return ApiErrorRenderer::toApiError($e, $request)->toResponse();
             }
         });

@@ -1,4 +1,5 @@
-# One image for the Laravel API, the MCP server and the test suites: PHP 8.4 and Node 22.
+# One image for the Laravel API (with the developer page's built assets), the MCP server and the
+# test suites: PHP 8.4 and Node 22.
 # The MCP tests read the Laravel source (to check the tool descriptions against v1) and the
 # end-to-end tests start the API, so both apps live side by side under /repo.
 FROM node:22-bookworm-slim AS node
@@ -23,6 +24,8 @@ WORKDIR /repo
 # this image also runs the tests.
 COPY api/composer.json api/composer.lock api/
 RUN cd api && composer install --no-interaction --no-progress --no-scripts --no-autoloader --prefer-dist
+COPY api/package.json api/package-lock.json api/
+RUN cd api && npm ci --no-audit --no-fund
 COPY mcp/package.json mcp/package-lock.json mcp/
 RUN cd mcp && npm ci --no-audit --no-fund
 
@@ -34,6 +37,7 @@ COPY mcp mcp
 RUN cd api \
     && cp .env.example .env \
     && composer dump-autoload --optimize \
-    && php artisan package:discover --ansi
+    && php artisan package:discover --ansi \
+    && npm run build
 
 WORKDIR /repo/api

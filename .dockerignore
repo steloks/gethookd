@@ -2,6 +2,8 @@
 **/.env
 **/node_modules
 api/vendor
+api/public/build
+api/public/hot
 api/storage/logs/*
 api/storage/framework/cache/*
 api/storage/framework/sessions/*

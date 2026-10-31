@@ -799,3 +799,42 @@ Log of the important prompts used during this assessment. Add an entry per task,
   - DELETE is shown not to be billed;
   - every 429 test spends its limit inside one frozen clock minute.
 - **README:** "local processes are trusted", the access-log note, the scope and name rules.
+
+## 30. React developer page
+
+**Prompt:** "ook. lets start with the react dev page".
+
+**What was built:**
+- React 19 + TypeScript in `api/resources/js/developer`: `App`, `UsagePanel`, `CreateKeyForm`, `NewKeySecret` + `CopyButton`, `KeyList` with an inline revoke confirmation, and `ProblemMessage`.
+- `api.ts` calls `/developer/*` with the session cookie and the CSRF token.
+- Served by Laravel at `/developer` (Blade shell with `@vite`), inside `LocalHostOnly`; `/` redirects there.
+- The bunny.net font plugin and the welcome page were removed (a network fetch at build time, and a placeholder).
+- Vite 8 + `@vitejs/plugin-react`. Vitest 5, because Vitest 3 doesn't support Vite 8.
+- The Docker image runs `npm ci` and `npm run build` for the page. `make test` gained `test-web`.
+- The key is kept only in React state, cleared on "I've stored it", and never written to storage or the URL.
+
+**Verification:**
+- Page tests (Vitest + Testing Library, jsdom, an in-memory fake that records requests): 13 passed.
+- Mutations: 14 run, 13 caught at first. "Bar not capped" was missed because the test's 1,005/1,000 rounds to 100% anyway; with 1,500 it is caught.
+- Pest: 551 passed. `DeveloperPageTest` checks the page, the CSRF meta tag, the host check and the `/` redirect. The scaffold's `ExampleTest` (asserting `/` returns 200 from the removed welcome page) was deleted: that behaviour was changed on purpose, and the redirect test covers the new one.
+- Container: `make up` built the assets; `/developer` serves them, `/` redirects (302), and `make test-web` passed 13/13.
+
+## 31. Fixes from the developer-page audit
+
+**Prompt:** "@test-auditor check the react page implementation if it meets the requirements" (the first run died on a network error and was restarted), then "yes go on, fix them".
+
+**What changed:**
+- **M1, locale:** formatting uses the browser's language explicitly, and the tests pin en-US and UTC. The usage test had failed under a German host locale ("1.000"). It now passes under de_DE with TZ=Pacific/Auckland.
+- **M2, contract:** the test fake validates every response it serves against `openapi/v1.yaml` (Ajv + ajv-formats; OpenAPI `nullable` is supported). Renaming a field in the spec now fails the page tests.
+- **M3, races:** `refresh()` keeps a sequence number, so only the latest refresh may update the page. A test holds the create's list refresh until after a revoke, and the key stays revoked.
+- **L1:** cells are asserted by column header, including the revoked time. The bar level is tested at 799 (normal), 800 (high) and exhausted. `did_you_mean` is rendered and tested.
+  - The level now uses the exact share instead of the rounded percent; the 799 test caught 79.9% rounding to "high".
+- **L2:** a 2xx without JSON is an `ApiProblem`; for a create, it says to check for a key you never saw. Tests cover 500 HTML on load and 200 HTML on list and create.
+- **L3:** an unreadable date shows "—". Times show their zone. An `ErrorBoundary` wraps the app.
+  - **Bug found on the way:** `Intl.DateTimeFormat` with `dateStyle` + `timeZoneName` throws (they can't be combined), which would have blanked the page in a real browser. The date and time fields are now spelled out.
+- **L4:** a failed revoke refreshes the list. Tested with a key revoked elsewhere, which then answers 404.
+- **L5:** a double-submit test: a held POST, a second click and Enter, and exactly one POST.
+
+**Verification:**
+- Vitest: 22 passed (3 runs, plus a run under de_DE / NZ time); tsc clean.
+- Mutations: 13 new ones run, 13 caught (one renames a required field in `openapi/v1.yaml`). The original 14 page mutations were rerun, and all are still caught.

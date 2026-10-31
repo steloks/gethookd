@@ -7,10 +7,10 @@ Work in progress for the GetHookd "Fullstack Engineer (API & MCP)" assessment. D
 Needs Docker (with Compose v2), `make` and `openssl`; nothing else on the host.
 
 ```
-make up      # build and start Postgres, Redis, the API (:8000) and the MCP server (:3001); migrate; seed an empty database
+make up      # build and start Postgres, Redis, the API (:8000) with the developer page, and the MCP server (:3001); migrate; seed an empty database
 make key     # create a search:read API key (shown once): make key NAME=my-laptop
 make ingest  # live ingest: inserts 1-5 and deactivates 1-2 ads every second, until Ctrl-C
-make test    # all tests: Pest (API), Vitest (MCP), and the MCP end-to-end tests against the real API
+make test    # all tests: Pest (API), Vitest (developer page, MCP), and the MCP end-to-end tests against the real API
 make seed    # replace all ads with the deterministic seed data
 make down    # stop everything (data is kept in the pgdata volume)
 ```
@@ -111,6 +111,26 @@ The MCP server calls v1, so `search_ads` and `get_ad` are billed through these; 
 **Monthly quota:** 1,000 billable calls per calendar month (UTC) per account, shared by all of its keys (the rate limit is per key). Over the quota, billable calls get a 429 `quota_exceeded`, which is not retryable and gives `resets_at` (the first instant of the next month) and a `Retry-After` until then. `/niches` and repeats of an already-billed `Idempotency-Key` still work, since they cost nothing. On v0 the quota error is v0's usual 400.
 
 **MCP retries:** the MCP server sends one `Idempotency-Key` per tool call, derived from the MCP session and the JSON-RPC request id, and reuses it when it retries v1 after a timeout or 5xx, or when the client re-sends the same message. A model deciding to call a tool again is a new tool call and is billed, like a REST client sending a new request: nothing distinguishes "retry" from "ask again" except the request id, and treating identical arguments as a retry would make deliberate repeats free.
+
+### Developer page
+
+`http://localhost:8000/developer` (`/` redirects there): React + TypeScript (`api/resources/js/developer`), built by Vite into the image and served by Laravel, so the page and its JSON endpoints share one origin.
+
+- **Usage this month:** billable calls against the 1,000 quota, as the meter counts them (`/developer/usage`), split REST/MCP, with the reset time. The bar turns amber from 80% (the exact share: 799 of 1,000 is still green) and red when used up, with a warning that searches are refused until the reset. "This month" is a UTC calendar month. Times are shown in the reader's time zone, with the zone named (e.g. "Nov 1, 2026, 1:00 PM GMT+13" for the UTC-midnight reset).
+- **Create a key:** a name and scopes (default `search:read`). The new key is shown once, in a panel with a copy button. If the browser blocks the clipboard, the page says so and the key stays selectable. The key lives only in the page's memory until "I've stored it", never in storage or the URL. API problems are shown as the API words them, with suggested fixes.
+- **Your keys:** name, prefix, scopes, created, last used ("Never" until first use), calls this month. Revoking asks for confirmation inline and says the key stops on its very next request. Revoked keys stay listed as revoked.
+- **Writes** send the CSRF token from the page. The page has a `no-referrer` referrer policy (a meta tag), so its URL is never sent to other sites.
+- **Robustness:**
+  - Overlapping refreshes (create, then revoke at once) apply only the latest answer, so a revoked key can't reappear as active.
+  - A failed revoke refreshes the list, to show the key's real state.
+  - A success response without the expected data is reported as an error. For a create, it says to check the list for a key you never saw.
+  - A date it can't read shows "—".
+  - A rendering error shows a message instead of a blank page.
+- **Tests:** `make test-web`, or `npm test` in `api/` (Vitest + Testing Library against an in-memory fake of `/developer/*`).
+  - They check the requests the page sends as well as what it shows.
+  - Every response the fake serves is validated against the `openapi/v1.yaml` schemas (`ApiKey`, `Usage`, `CreatedKey`, `Error`), and a Pest test checks that `/developer/*` returns exactly what `/api/v1` returns, so the fixtures can't drift from the real API.
+  - Locale and time zone are pinned (en-US, UTC).
+- **Development with hot reload:** `npm run dev` in `api/` with `php artisan serve`. The Docker image serves the built assets, with no Vite server.
 
 ### API keys and usage
 

@@ -5,9 +5,10 @@ use App\Http\Middleware\LocalHostOnly;
 use App\Http\Middleware\RejectQueryParameters;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/', function () {
-    return view('welcome');
-});
+Route::redirect('/', '/developer');
+
+// The developer page (React, resources/js/developer), for the single local user.
+Route::get('developer', fn () => view('developer'))->middleware(LocalHostOnly::class);
 
 // The developer page's JSON endpoints, for the single local user (no login, as the spec allows).
 // The web group adds the session and CSRF protection; LocalHostOnly refuses other host names.
