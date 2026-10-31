@@ -62,6 +62,30 @@ describe('Streamable HTTP endpoint', () => {
     expect((await post(h.mcpUrl, '{not json')).status).toBe(400);
   });
 
+  it('answers 413 to a client still uploading a large body, instead of resetting the connection', async () => {
+    const chunk = new Uint8Array(64 * 1024).fill(120);
+    let sent = 0;
+    // A body that keeps arriving well after the server has seen 1 MB, as from a slow client.
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (sent >= 3 * 1024 * 1024) return controller.close();
+        sent += chunk.length;
+        await new Promise((r) => setTimeout(r, 2));
+        controller.enqueue(chunk);
+      },
+    });
+
+    const res = await fetch(h.mcpUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ghk_test_key' },
+      body,
+      duplex: 'half',
+    } as RequestInit);
+
+    expect(res.status).toBe(413);
+    await res.text();
+  });
+
   it('ends a session on DELETE', async () => {
     const client = await h.connect();
     const sessionId = (client.transport as { sessionId?: string }).sessionId!;

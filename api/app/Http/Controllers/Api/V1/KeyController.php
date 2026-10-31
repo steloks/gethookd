@@ -16,4 +16,12 @@ class KeyController extends KeysController
         /** @var User */
         return $request->user();
     }
+
+    /**
+     * The calling key's own scopes: a key can't create a key that can do more than it can.
+     */
+    protected function grantableScopes(Request $request): ?array
+    {
+        return array_values($request->user()->currentAccessToken()->abilities ?? []);
+    }
 }

@@ -16,6 +16,7 @@ enum ErrorCode: string
     case MethodNotAllowed = 'method_not_allowed';
     case InvalidParameters = 'invalid_parameters';
     case IdempotencyKeyReused = 'idempotency_key_reused';
+    case PayloadTooLarge = 'payload_too_large';
     case RateLimited = 'rate_limited';
     case QuotaExceeded = 'quota_exceeded';
     case InternalError = 'internal_error';
@@ -32,6 +33,7 @@ enum ErrorCode: string
             self::MethodNotAllowed => 405,
             self::InvalidParameters => 422,
             self::IdempotencyKeyReused => 422,
+            self::PayloadTooLarge => 413,
             self::RateLimited => 429,
             self::QuotaExceeded => 429,
             self::InternalError => 500,
@@ -61,6 +63,7 @@ enum ErrorCode: string
             self::MethodNotAllowed => 'This endpoint does not support that HTTP method.',
             self::InvalidParameters => 'Some request parameters are unknown or invalid.',
             self::IdempotencyKeyReused => 'This Idempotency-Key was already used for a different request.',
+            self::PayloadTooLarge => 'The request body is larger than this API accepts.',
             self::RateLimited => 'Too many requests with this API key.',
             self::QuotaExceeded => 'This account has used its monthly quota of billable calls.',
             self::InternalError => 'Something went wrong on our side.',
@@ -79,6 +82,7 @@ enum ErrorCode: string
             self::MethodNotAllowed => 'Use one of the methods in the Allow header.',
             self::InvalidParameters => 'Fix each parameter listed in details (allowed values and likely corrections are given there), then send the request again.',
             self::IdempotencyKeyReused => 'Send a new Idempotency-Key for a new request. Reuse a key only to retry exactly the same request.',
+            self::PayloadTooLarge => 'Send a smaller body; no endpoint needs more than a few kilobytes. Retrying it unchanged will not help.',
             self::RateLimited => 'Wait the number of seconds in retry_after (also the Retry-After header), then send the same request again.',
             self::QuotaExceeded => 'Do not retry until resets_at. /api/v1/niches still works, and so do retries of an already-billed Idempotency-Key.',
             self::InternalError => 'Retry the same request in a few seconds. If it keeps failing, report it.',

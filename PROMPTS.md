@@ -780,3 +780,22 @@ Log of the important prompts used during this assessment. Add an entry per task,
 **Verification:**
 - Pest: 531 passed; Pint clean.
 - Mutations: 22 run, 21 caught at first. "revoke: no id check" was missed because the malformed ids didn't point at a real key. A test now uses `<real id>.0`, `<real id>abc` and `<real id>%20`, and the mutation is caught.
+
+## 29. Fixes from the key-endpoint audits
+
+**Prompt:** "run the test and security auditors", then "fix those".
+
+**Audit note:** both auditors ran Pest at the same time against the shared test database and Redis DB 15, so each saw false failures (the whole RateLimit suite erroring with "relation users does not exist"). Rerun alone it passed 14/14. From now on, test-running auditors run one after the other.
+
+**What changed:**
+- **Scope rule:** on `POST /api/v1/keys` the new key's scopes must be a subset of the calling key's, otherwise 403 `insufficient_scope` and nothing is created. The developer page (the account owner) is unrestricted.
+- **Usage:** the total comes from `Meter::usage()`, the count the quota is enforced with. A test now bills another account's call and checks that each account sees only its own.
+- **Name:** a name that looks like an API key → 422. The OpenAPI spec says "after trimming, 1 to 100 characters" (no raw `maxLength`). Tests cover 100 ASCII, 100 multibyte and 100 padded characters (accepted), and 101 multibyte (rejected).
+- **Oversized bodies:** `docker/app/php.ini` (display_errors off, errors to stderr, post_max_size 1M). Bodies over the limit got a 200 HTML PHP warning and now get 413 `payload_too_large`. That is a new error code in the registry, the OpenAPI spec and the MCP wording.
+- **MCP server:** an oversized body was answered and then the socket destroyed, so a client still uploading saw EPIPE instead of the 413. That was the cause of an intermittent failure in the MCP suite (1 in about 8 full runs). The rest of the body is now drained, with `Connection: close`. A slow streaming `fetch` upload test catches the old behaviour; two weaker test designs with Node's http client didn't catch it.
+- **Developer endpoints** reject query parameters, like the API's.
+- **Tests:**
+  - `same-site` and `X-Forwarded-Host` are refused on the page;
+  - DELETE is shown not to be billed;
+  - every 429 test spends its limit inside one frozen clock minute.
+- **README:** "local processes are trusted", the access-log note, the scope and name rules.

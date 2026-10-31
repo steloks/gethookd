@@ -34,5 +34,6 @@ Fixed windows of one clock minute, one Redis counter per key; see the README ("R
   - No CORS on `/developer/*`.
   - API routes never accept the session.
   - In production this would be a real login; the endpoints already take the owner from one method, so only that method changes.
-- **Usage reads `billable_calls`, the table billing writes,** so the page, the quota and an invoice can't disagree.
+- **A key can't hand out more than it has.** On the API a new key's scopes must be a subset of the calling key's, so a leaked `keys:manage`-only key can't mint keys that read data. The developer page is the account owner and is not limited.
+- **Usage reads `billable_calls`, the table billing writes,** and its total is `Meter::usage()`, the same count the quota is enforced with, so the page, the quota and an invoice can't disagree.
 - `last_used_at` is written on every authenticated request (Sanctum's behaviour): one extra UPDATE per call. At scale it would be sampled, or batched through Redis.

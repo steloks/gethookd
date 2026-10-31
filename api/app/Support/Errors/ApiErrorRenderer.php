@@ -81,6 +81,7 @@ final class ApiErrorRenderer
             $status === 429 => new ApiError(ErrorCode::RateLimited, retryAfter: $retryAfter, headers: $headers),
             $status === 503 => new ApiError(ErrorCode::Unavailable, retryAfter: $retryAfter, headers: $headers),
             $status === 403 => new ApiError(ErrorCode::Forbidden),
+            $status === 413 => new ApiError(ErrorCode::PayloadTooLarge),
             $status >= 400 && $status < 500 => new ApiError(ErrorCode::BadRequest),
             default => new ApiError(ErrorCode::InternalError),
         };

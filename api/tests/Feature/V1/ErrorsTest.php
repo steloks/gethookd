@@ -157,7 +157,14 @@ describe('other HTTP errors keep their meaning', function () {
 
         assertApiError($response, ErrorCode::BadRequest);
         expect($response->getContent())->not->toContain('framework text');
-    })->with([400, 413, 414, 431]);
+    })->with([400, 410, 414, 431]);
+
+    it('maps 413 to payload_too_large', function () {
+        $response = v1('GET', '/api/v1/__abort/413');
+
+        assertApiError($response, ErrorCode::PayloadTooLarge);
+        expect($response->getContent())->not->toContain('framework text');
+    });
 
     it('maps 429 to rate_limited with how long to wait, in the body and the header', function () {
         $response = v1('GET', '/api/v1/__abort/429?wait=17');
@@ -231,6 +238,7 @@ describe('error code registry', function () {
             'method_not_allowed' => 405,
             'invalid_parameters' => 422,
             'idempotency_key_reused' => 422,
+            'payload_too_large' => 413,
             'rate_limited' => 429,
             'quota_exceeded' => 429,
             'internal_error' => 500,

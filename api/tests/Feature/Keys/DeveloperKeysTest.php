@@ -51,6 +51,15 @@ it('never shows or revokes another account\'s keys', function () {
     expect($theirs->refresh()->revoked_at)->toBeNull();
 });
 
+it('creates keys with any scope: the page acts as the account owner', function () {
+    $this->postJson('/developer/keys', ['name' => 'both', 'scopes' => ['search:read', 'keys:manage']])
+        ->assertCreated()->assertJsonPath('data.scopes', ['search:read', 'keys:manage']);
+});
+
+it('rejects query parameters, like the API\'s key endpoints', function (string $method, string $path) {
+    assertApiError($this->json($method, $path.'?all=1', $method === 'POST' ? ['name' => 'x'] : []), ErrorCode::InvalidParameters, withDetails: true);
+})->with([['GET', '/developer/keys'], ['POST', '/developer/keys'], ['DELETE', '/developer/keys/1'], ['GET', '/developer/usage']]);
+
 it('answers errors in the API error shape', function () {
     assertApiError($this->postJson('/developer/keys', ['nme' => 'x']), ErrorCode::InvalidParameters, withDetails: true);
     assertApiError($this->deleteJson('/developer/keys/999999'), ErrorCode::NotFound);
@@ -76,6 +85,13 @@ describe('cross-site protection', function () {
         expect(PersonalAccessToken::findToken($key)->revoked_at)->toBeNull();
     });
 
+    it('refuses a write from a sibling site (same-site is not same-origin)', function () {
+        enforceCsrf();
+
+        assertApiError($this->postJson('/developer/keys', ['name' => 'planted'], ['Sec-Fetch-Site' => 'same-site']), ErrorCode::Forbidden);
+        expect(PersonalAccessToken::query()->count())->toBe(0);
+    });
+
     it('accepts a write the browser marks same-origin', function () {
         enforceCsrf();
 
@@ -96,6 +112,10 @@ describe('cross-site protection', function () {
         assertApiError($response, ErrorCode::Forbidden);
         expect($response->getContent())->not->toContain('"secret"');
     })->with([['GET', '/developer/keys'], ['GET', '/developer/usage'], ['POST', '/developer/keys'], ['DELETE', '/developer/keys/1']]);
+
+    it('ignores X-Forwarded-Host, so a proxy header can\'t pass the host check', function () {
+        assertApiError($this->getJson('http://evil.example:8000/developer/keys', ['X-Forwarded-Host' => 'localhost']), ErrorCode::Forbidden);
+    });
 
     it('answers on localhost and 127.0.0.1', function (string $host) {
         $this->getJson("http://{$host}:8000/developer/keys")->assertOk();

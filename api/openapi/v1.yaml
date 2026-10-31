@@ -255,7 +255,8 @@ paths:
       description: |
         Creates a key for the account that owns the calling key. The response is the only time
         the full key (`secret`) is ever shown; it is stored only as a hash. Needs the
-        `keys:manage` scope. Not billed. Unknown fields and invalid values are rejected with
+        `keys:manage` scope, and the new key may only have scopes the calling key has (otherwise
+        403 `insufficient_scope`). Not billed. Unknown fields and invalid values are rejected with
         422 `invalid_parameters`.
       requestBody:
         required: true
@@ -450,8 +451,9 @@ components:
         name:
           type: string
           minLength: 1
-          maxLength: 100
-          description: A label to tell this key apart (trimmed).
+          description: |
+            A label to tell this key apart. The API trims it; after trimming, name must have 1 to 100
+            characters, and it must not look like an API key (names are shown in key lists).
         scopes:
           type: array
           minItems: 1
@@ -635,7 +637,7 @@ components:
           properties:
             code:
               type: string
-              enum: [bad_request, unauthenticated, insufficient_scope, forbidden, not_found, method_not_allowed, invalid_parameters, idempotency_key_reused, rate_limited, quota_exceeded, internal_error, unavailable]
+              enum: [bad_request, unauthenticated, insufficient_scope, forbidden, not_found, method_not_allowed, invalid_parameters, idempotency_key_reused, payload_too_large, rate_limited, quota_exceeded, internal_error, unavailable]
             message:
               type: string
               description: What went wrong, for a person or a model.

@@ -61,13 +61,27 @@ final class KeyManagement
      * Creates a key from a request body. Unknown fields and invalid values are rejected, like
      * every other v1 input.
      *
+     * @param  list<string>|null  $grantable  the scopes the caller may give the new key (its own,
+     *                                        for an API key); null for the account owner (the developer page)
      * @return array{0: array<string, mixed>, 1: string} the key as listed, and its plaintext (shown once)
      *
-     * @throws ApiError invalid_parameters, or bad_request when the body is not a JSON object
+     * @throws ApiError invalid_parameters, bad_request when the body is not a JSON object, or
+     *                  insufficient_scope for a scope the caller doesn't have
      */
-    public function create(User $owner, mixed $body): array
+    public function create(User $owner, mixed $body, ?array $grantable = null): array
     {
         [$name, $scopes] = $this->parseCreate($body);
+
+        // A key can't hand out more than it has: a keys:manage-only key (say, a provisioning
+        // script's) can't mint a key that searches.
+        $missing = $grantable === null ? [] : array_values(array_diff(array_map(fn (ApiScope $s) => $s->value, $scopes), $grantable));
+        if ($missing !== []) {
+            throw new ApiError(
+                ErrorCode::InsufficientScope,
+                'This API key can only create keys with scopes it has itself ('.implode(', ', $grantable).'); it lacks '.implode(', ', $missing).'.',
+                'Send "scopes" with only those scopes, or create the key on the developer page or with a key that has them.',
+            );
+        }
         [$key, $plaintext] = $this->keys->issue($owner, $name, $scopes);
 
         return [self::present($key->refresh(), 0), $plaintext];
@@ -107,6 +121,8 @@ final class KeyManagement
     public function usage(User $owner, CarbonInterface $now): array
     {
         [$start, $end] = Meter::period($now);
+        // The total is the meter's own count, the one the quota is enforced with.
+        $used = $this->meter->usage($owner->getKey(), $now);
         $byClient = DB::table('billable_calls')
             ->where('user_id', $owner->getKey())
             ->where('created_at', '>=', $start)
@@ -114,7 +130,6 @@ final class KeyManagement
             ->groupBy('client')
             ->selectRaw('client, count(*) as calls')
             ->pluck('calls', 'client');
-        $used = (int) $byClient->sum();
 
         return [
             'period_start' => $start->utc()->toIso8601ZuluString(),
@@ -178,6 +193,9 @@ final class KeyManagement
             $problems[] = self::problem('name', is_string($name) ? ParameterIssue::EmptyValue : ParameterIssue::InvalidValue, 'name must be text of 1 to '.self::MAX_NAME_LENGTH.' characters.');
         } elseif (mb_strlen(trim($name)) > self::MAX_NAME_LENGTH) {
             $problems[] = self::problem('name', ParameterIssue::TooLong, 'name is longer than '.self::MAX_NAME_LENGTH.' characters.');
+        } elseif (SafeText::containsKey($name)) {
+            // A name is stored and listed as typed; a key pasted here would be shown in plaintext.
+            $problems[] = self::problem('name', ParameterIssue::InvalidValue, 'name looks like an API key. Names are shown in key lists, so use a label such as "laptop" instead, and revoke that key if it was a real one.');
         }
 
         $scopes = [ApiScope::SearchRead];

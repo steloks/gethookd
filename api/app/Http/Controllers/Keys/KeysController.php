@@ -19,6 +19,13 @@ abstract class KeysController extends Controller
 
     abstract protected function owner(Request $request): User;
 
+    /**
+     * The scopes the caller may give a new key; null when it may give any.
+     *
+     * @return list<string>|null
+     */
+    abstract protected function grantableScopes(Request $request): ?array;
+
     public function index(Request $request): JsonResponse
     {
         return response()->json(['data' => $this->keys->list($this->owner($request), CarbonImmutable::now())]);
@@ -29,7 +36,7 @@ abstract class KeysController extends Controller
         $content = (string) $request->getContent();
         $body = $content === '' ? null : json_decode($content, true, 16);
 
-        [$key, $secret] = $this->keys->create($this->owner($request), $body);
+        [$key, $secret] = $this->keys->create($this->owner($request), $body, $this->grantableScopes($request));
 
         // The only response that ever contains the key: nothing on the way may keep a copy.
         return response()->json([

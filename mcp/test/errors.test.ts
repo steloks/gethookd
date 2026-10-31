@@ -13,8 +13,8 @@ afterEach(async () => {
 });
 
 describe('v1 error codes reach the model unchanged', () => {
-  it('reads the 12 codes from the Laravel registry', () => {
-    expect(errorCodes()).toHaveLength(12);
+  it('reads the 13 codes from the Laravel registry', () => {
+    expect(errorCodes()).toHaveLength(13);
     expect(retryableCodes().sort()).toEqual(['internal_error', 'rate_limited', 'unavailable']);
   });
 

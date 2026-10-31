@@ -17,4 +17,12 @@ class KeyController extends KeysController
     {
         return LocalUser::get();
     }
+
+    /**
+     * The page acts as the account owner, who may create keys with any scope.
+     */
+    protected function grantableScopes(Request $request): ?array
+    {
+        return null;
+    }
 }

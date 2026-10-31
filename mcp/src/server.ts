@@ -266,20 +266,33 @@ export function createHttpServer(options: HttpOptions): McpHttpServer {
 
 /** The parsed JSON body, or undefined after answering with an error. */
 async function readJson(req: IncomingMessage, res: ServerResponse): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) {
-      jsonRpcError(res, 413, ErrorCode.InvalidRequest, 'Request body too large.');
-      req.destroy();
-      return undefined;
-    }
-    chunks.push(chunk as Buffer);
+  const body = await new Promise<Buffer | undefined>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (chunk: Buffer) => {
+      if (size > MAX_BODY_BYTES) {
+        return; // already answered; the rest is read and dropped
+      }
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        // Answer now but keep reading the upload: destroying the socket while the client is
+        // still sending makes it see a connection reset (EPIPE) instead of the 413.
+        res.setHeader('Connection', 'close');
+        jsonRpcError(res, 413, ErrorCode.InvalidRequest, 'Request body too large.');
+        resolve(undefined);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(size > MAX_BODY_BYTES ? undefined : Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+  if (body === undefined) {
+    return undefined;
   }
 
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return JSON.parse(body.toString('utf8'));
   } catch {
     jsonRpcError(res, 400, ErrorCode.ParseError, 'The body is not valid JSON.');
     return undefined;

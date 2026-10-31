@@ -192,7 +192,9 @@ it('documents the key fields, scopes and limits the API uses', function () {
     expect(spec('components/schemas/ApiKey/properties/scopes/items')['enum'])->toBe(ApiScope::values())
         ->and(spec('components/schemas/NewKey/properties/scopes/items')['enum'])->toBe(ApiScope::values())
         ->and(array_keys(spec('components/schemas/NewKey/properties')))->toBe(KeyManagement::CREATE_FIELDS)
-        ->and(spec('components/schemas/NewKey/properties/name')['maxLength'])->toBe(KeyManagement::MAX_NAME_LENGTH);
+        // The API trims the name first, which a schema can't say, so the limit is in the description.
+        ->and(spec('components/schemas/NewKey/properties/name'))->not->toHaveKey('maxLength')
+        ->and(preg_replace('/\s+/', ' ', spec('components/schemas/NewKey/properties/name')['description']))->toContain('after trimming, name must have 1 to '.KeyManagement::MAX_NAME_LENGTH.' characters');
 });
 
 it('documents every error code in the registry', function () {
@@ -210,7 +212,10 @@ function documentedResponseRequests(): array
 {
     $adPath = fn () => '/api/v1/ads/'.Ad::factory()->create()->id;
     $readOnly = fn () => v1Key([ApiScope::KeysManage]);
-    $limited = function () {
+    // Each limited key is spent inside one clock minute, so the limit can't reset before the request.
+    $insideOneMinute = fn () => test()->travelTo(CarbonImmutable::parse('2026-10-05 12:00:15', 'UTC'));
+    $limited = function () use ($insideOneMinute) {
+        $insideOneMinute();
         $key = v1Key();
         spendRateLimit($key);
 
@@ -221,9 +226,10 @@ function documentedResponseRequests(): array
         $model::retrieved(fn () => throw new RuntimeException('boom'));
     };
 
-    $manager = fn () => v1Key([ApiScope::KeysManage]);
+    $manager = fn () => v1Key([ApiScope::SearchRead, ApiScope::KeysManage]);
     $searchOnly = fn () => v1Key([ApiScope::SearchRead]);
-    $limitedManager = function () {
+    $limitedManager = function () use ($insideOneMinute) {
+        $insideOneMinute();
         $key = v1Key([ApiScope::KeysManage]);
         spendRateLimit($key);
 
@@ -285,7 +291,8 @@ function documentedResponseRequests(): array
             return v1('GET', '/api/v1/usage', $key);
         },
         'get /api/v1/usage 422' => fn () => v1('GET', '/api/v1/usage?month=10', $searchOnly()),
-        'get /api/v1/usage 429' => function () {
+        'get /api/v1/usage 429' => function () use ($insideOneMinute) {
+            $insideOneMinute();
             $key = v1Key();
             spendRateLimit($key);
 

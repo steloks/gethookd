@@ -123,6 +123,7 @@ function nextStep(v1: V1ErrorBody, tool: string, args: Record<string, unknown>, 
       return `Call ${tool} again in a few seconds with the same arguments (this server already retried once). If it keeps failing, tell the user the GetHookd API is having problems.`;
     case 'bad_request':
       return `Do not retry the same arguments. Check them against the ${tool} input schema, then call it again.`;
+    case 'payload_too_large':
     case 'method_not_allowed':
       return 'Do not retry. This MCP server sent a request the GetHookd API does not support; tell the user it is a bug in the MCP server.';
     case 'idempotency_key_reused':

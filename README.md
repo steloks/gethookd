@@ -128,6 +128,8 @@ Rules:
 
 - **A new key is shown once,** in the create response, sent with `Cache-Control: no-store`. Only its SHA-256 is stored; lists show the 12-character `prefix`.
 - **A key without scopes in the request gets `search:read`.** Unknown fields and invalid values are rejected with 422, with `did_you_mean`, like search parameters.
+- **An API key can only create keys with scopes it has itself.** A `keys:manage`-only key (for example a provisioning script's) can create `keys:manage` keys but not `search:read` ones (403 `insufficient_scope`). The developer page acts as the account owner and can create any scope.
+- **The name is a label of 1–100 characters after trimming.** It is stored and listed as typed, so a name that looks like an API key is rejected (422): a pasted key would otherwise be shown in plaintext in every list.
 - **Revoking sets `revoked_at` and keeps the row,** so the key stays listed.
   - The key fails on its very next request, REST and MCP.
   - Revoking again keeps the first time.
@@ -136,6 +138,9 @@ Rules:
 - **`last_used_at`** is the last request made with the key, refused ones included (Sanctum writes it on every authenticated request).
 - **Usage** is the account's billable calls this calendar month (UTC), split by `rest` and `mcp`, against the 1,000 quota. It is counted from `billable_calls`, the table billing writes; there is no second counter. Each listed key shows its own count for the month.
 - **Key management and usage are never billed,** but they count against the calling key's rate limit.
+- **Local processes are trusted (an assumption).** The page's endpoints have no login, no rate limit and no cap on the number of keys, as the spec's single local user implies. Anything on this machine that can reach port 8000 with `Host: localhost` can manage the local user's keys. Browsers on other sites can't: CSRF, the host check and the missing CORS headers stop them. The page's endpoints reject query parameters, like the API's.
+- **A key put in a URL path appears in the access log.** `php artisan serve` logs every request path in full, so `DELETE /api/v1/keys/<a key>` (a misplaced key) is logged in plaintext, although the 404 body redacts it. Query strings and `Authorization` headers are not logged. In production, the proxy in front would redact `ghk_…` in logged paths.
+- **Request bodies are capped at 1 MB** (`docker/app/php.ini`). Larger ones get 413 `payload_too_large`. PHP errors go to the container log, never into responses.
 
 ### MCP server (`mcp/`)
 

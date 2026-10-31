@@ -13,7 +13,8 @@ use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 
 beforeEach(function () {
-    $this->manager = v1Key([ApiScope::KeysManage]);
+    // Both scopes, so it may create keys of either scope; tests that need a manage-only key make one.
+    $this->manager = v1Key([ApiScope::SearchRead, ApiScope::KeysManage]);
 });
 
 function keyRow(string $plaintext): PersonalAccessToken
@@ -40,9 +41,30 @@ describe('scopes', function () {
     });
 
     it('lets a keys:manage key manage keys but not search', function () {
-        v1('GET', '/api/v1/keys', $this->manager)->assertOk();
+        $manageOnly = v1Key([ApiScope::KeysManage]);
 
-        assertApiError(v1('GET', '/api/v1/ads', $this->manager), ErrorCode::InsufficientScope);
+        v1('GET', '/api/v1/keys', $manageOnly)->assertOk();
+
+        assertApiError(v1('GET', '/api/v1/ads', $manageOnly), ErrorCode::InsufficientScope);
+    });
+
+    it('lets a key create keys only with scopes it has itself', function () {
+        $manageOnly = v1Key([ApiScope::KeysManage]);
+        $before = PersonalAccessToken::query()->count();
+
+        $minted = v1('POST', '/api/v1/keys', $manageOnly, body: ['name' => 'searcher', 'scopes' => ['search:read']]);
+        $default = v1('POST', '/api/v1/keys', $manageOnly, body: ['name' => 'searcher']);
+
+        assertApiError($minted, ErrorCode::InsufficientScope);
+        assertApiError($default, ErrorCode::InsufficientScope);
+        expect($minted->json('error.message'))->toContain('lacks search:read')
+            ->and(PersonalAccessToken::query()->count())->toBe($before);
+        v1('POST', '/api/v1/keys', $manageOnly, body: ['name' => 'admin', 'scopes' => ['keys:manage']])->assertCreated();
+        v1('POST', '/api/v1/keys', $this->manager, body: ['name' => 'both', 'scopes' => ['search:read', 'keys:manage']])->assertCreated();
+    });
+
+    it('reports invalid fields before missing scopes', function () {
+        assertApiError(v1('POST', '/api/v1/keys', v1Key([ApiScope::KeysManage]), body: ['nme' => 'x']), ErrorCode::InvalidParameters, withDetails: true);
     });
 
     it('shows usage to a key with either scope', function () {
@@ -133,7 +155,7 @@ describe('create', function () {
         $other = User::factory()->create();
         [, $theirManager] = app(ApiKeys::class)->issue($other, 'admin', [ApiScope::KeysManage]);
 
-        $secret = v1('POST', '/api/v1/keys', $theirManager, body: ['name' => 'x'])->json('secret');
+        $secret = v1('POST', '/api/v1/keys', $theirManager, body: ['name' => 'x', 'scopes' => ['keys:manage']])->json('secret');
 
         expect(keyRow($secret)->tokenable_id)->toBe($other->getKey());
     });
@@ -158,6 +180,44 @@ describe('create', function () {
         'scopes not a list' => [['name' => 'x', 'scopes' => 'search:read'], [['param' => 'scopes', 'issue' => 'invalid_value']]],
         'two problems' => [['nme' => 'x'], [['param' => 'nme', 'issue' => 'unknown_parameter', 'did_you_mean' => 'name'], ['param' => 'name', 'issue' => 'missing']]],
     ]);
+
+    it('accepts names of up to 100 characters after trimming, counted as characters', function (string $name) {
+        v1('POST', '/api/v1/keys', $this->manager, body: ['name' => $name])->assertCreated()->assertJsonPath('data.name', trim($name));
+    })->with([
+        '100 characters' => str_repeat('n', 100),
+        '100 multibyte characters' => str_repeat('ж', 100),
+        '100 characters with surrounding spaces' => '  '.str_repeat('n', 100).'  ',
+    ]);
+
+    it('rejects a 101-character multibyte name', function () {
+        assertApiError(v1('POST', '/api/v1/keys', $this->manager, body: ['name' => str_repeat('ж', 101)]), ErrorCode::InvalidParameters, withDetails: true);
+    });
+
+    it('rejects a name that looks like an API key, and never stores or echoes it', function () {
+        $secret = v1Key();
+        $before = PersonalAccessToken::query()->count();
+
+        $response = v1('POST', '/api/v1/keys', $this->manager, body: ['name' => "my key {$secret}"]);
+
+        assertApiError($response, ErrorCode::InvalidParameters, withDetails: true);
+        expect($response->json('error.details.0'))->toMatchArray(['param' => 'name', 'issue' => 'invalid_value'])
+            ->and($response->getContent())->not->toContain($secret)
+            ->and(PersonalAccessToken::query()->count())->toBe($before)
+            ->and(v1('GET', '/api/v1/keys', $this->manager)->getContent())->not->toContain($secret);
+    });
+
+    it('refuses a body larger than PHP accepts with 413 in the error shape', function () {
+        app('auth')->forgetGuards();
+        $response = $this->call('POST', '/api/v1/keys', server: [
+            'HTTP_AUTHORIZATION' => "Bearer {$this->manager}",
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_ACCEPT' => 'application/json',
+            'CONTENT_LENGTH' => (string) (64 * 1024 * 1024),
+        ], content: '{}');
+
+        assertApiError($response, ErrorCode::PayloadTooLarge);
+        expect(PersonalAccessToken::query()->count())->toBe(1);
+    });
 
     it('rejects a body that is not a JSON object', function (string $content) {
         app('auth')->forgetGuards();
@@ -261,12 +321,24 @@ describe('usage', function () {
         v1('GET', '/api/v1/ads', $search, ['X-Client' => 'mcp'])->assertOk();
 
         v1('GET', '/api/v1/keys', $this->manager)->assertOk();
-        v1('POST', '/api/v1/keys', $this->manager, body: ['name' => 'x'])->assertCreated();
+        $created = v1('POST', '/api/v1/keys', $this->manager, body: ['name' => 'x'])->assertCreated();
+        v1('DELETE', '/api/v1/keys/'.$created->json('data.id'), $this->manager)->assertOk();
         $usage = v1('GET', '/api/v1/usage', $search)->json('data');
 
         expect($usage['billable_calls'])->toBe(2)
             ->and($usage['by_client'])->toBe(['rest' => 1, 'mcp' => 1])
             ->and(DB::table('billable_calls')->count())->toBe(2);
+    });
+
+    it('counts only the calling account\'s calls', function () {
+        $this->travelTo(CarbonImmutable::parse('2026-10-31 12:00:00', 'UTC'));
+        $other = User::factory()->create();
+        [, $theirs] = app(ApiKeys::class)->issue($other, 'theirs', [ApiScope::SearchRead]);
+        billCall($theirs, 'mcp', CarbonImmutable::parse('2026-10-31 11:00:00', 'UTC'));
+        billCall($this->manager, 'rest', CarbonImmutable::parse('2026-10-31 11:00:00', 'UTC'));
+
+        expect(v1('GET', '/api/v1/usage', $this->manager)->json('data'))->toMatchArray(['billable_calls' => 1, 'by_client' => ['rest' => 1, 'mcp' => 0]])
+            ->and(v1('GET', '/api/v1/usage', $theirs)->json('data'))->toMatchArray(['billable_calls' => 1, 'by_client' => ['rest' => 0, 'mcp' => 1]]);
     });
 
     it('shows no calls left, not a negative number, over the quota', function () {
@@ -281,6 +353,8 @@ describe('usage', function () {
 });
 
 it('counts key management against the key\'s rate limit', function () {
+    // Inside one clock minute, so the spent limit can't reset before the request.
+    $this->travelTo(CarbonImmutable::parse('2026-10-05 12:00:15', 'UTC'));
     spendRateLimit($this->manager);
 
     assertApiError(v1('GET', '/api/v1/keys', $this->manager), ErrorCode::RateLimited, withRetryAfter: true);

@@ -10,6 +10,7 @@ RUN apt-get update \
     && docker-php-ext-install pdo_pgsql pcntl intl zip bcmath \
     && rm -rf /var/lib/apt/lists/*
 
+COPY docker/app/php.ini /usr/local/etc/php/conf.d/gethookd.ini
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
