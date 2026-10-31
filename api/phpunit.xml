@@ -21,7 +21,16 @@
         </include>
     </source>
     <php>
-        <env name="APP_ENV" value="testing"/>
+        <!-- force="true" sets getenv() and $_ENV, but Laravel reads $_SERVER first, where a shell
+             export or a container's environment would still win; so the values that must hold
+             are forced in $_SERVER too. -->
+        <server name="APP_ENV" value="testing" force="true"/>
+        <server name="DB_DATABASE" value="gethookd_test" force="true"/>
+        <server name="DB_URL" value="" force="true"/>
+        <server name="LOG_CHANNEL" value="single" force="true"/>
+        <server name="REDIS_DB" value="15" force="true"/>
+        <server name="REDIS_URL" value="" force="true"/>
+        <env name="APP_ENV" value="testing" force="true"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>
@@ -29,6 +38,7 @@
         <env name="DB_CONNECTION" value="pgsql"/>
         <env name="DB_DATABASE" value="gethookd_test" force="true"/>
         <env name="DB_URL" value="" force="true"/>
+        <env name="LOG_CHANNEL" value="single" force="true"/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="REDIS_DB" value="15" force="true"/>

@@ -145,7 +145,10 @@ it('fails fast, not after a minute, when Redis accepts connections but never ans
     Exceptions::fake();
     // The operating system accepts connections to this socket; nothing ever reads or replies.
     $silent = stream_socket_server('tcp://127.0.0.1:0');
-    config(['database.redis.default.port' => (int) substr(strrchr(stream_socket_get_name($silent, false), ':'), 1)]);
+    config([
+        'database.redis.default.host' => '127.0.0.1',
+        'database.redis.default.port' => (int) substr(strrchr(stream_socket_get_name($silent, false), ':'), 1),
+    ]);
     app()->forgetInstance('redis');
     Redis::clearResolvedInstances();
 

@@ -9,6 +9,11 @@ it('runs the test suite against the Postgres test database', function () {
         ->and(DB::selectOne('select 1 as ok')->ok)->toBe(1);
 });
 
+it('runs as the testing environment, whatever the shell or container sets', function () {
+    expect(app()->environment())->toBe('testing')
+        ->and(config('logging.default'))->toBe('single');
+});
+
 it('can reach Redis', function () {
     Cache::store('redis')->put('infra-check', 'ok', 5);
 
