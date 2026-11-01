@@ -1,39 +1,45 @@
 # Design
 
-## Billing and metering
+Details of every rule are in the README; this page covers the decisions behind them.
 
-The rule is written in the README ("Billing"). The decisions behind it:
+## Trade-offs
 
-- **Only successful data calls are billed.** Errors are never billed: v1 rejects unclear requests instead of guessing (a 422 with the fix), and billing those would charge agents for the strictness that keeps them from reporting wrong answers. Load from bad requests is limited by the rate limit, not by billing.
-- **`/niches` is free,** because tool descriptions send agents there first to get valid slugs; charging for it would push them to guess.
-- **Repeats are run again, not replayed.** Every billable endpoint is a read, and the data changes every second, so a stored response would be stale and cost storage for nothing. `Idempotency-Key` decides billing only.
-- **A key is bound to its request** (a fingerprint of method, path and query), or a client could send one constant key and never be billed.
-- **Exact counting:** each billable call takes a row lock on its account, claims its `Idempotency-Key` (insert, or reclaim an expired one, under a unique index), checks the quota and inserts its billing row, all in one transaction. Concurrent requests of one account are serialised only for that short write, so the count and the quota can't be overshot.
-- **Quota per account, rate limit per key:** the plan belongs to the account; the rate limit protects the service from one client.
-- **MCP retries** reuse the tool call's `Idempotency-Key`; a new tool call is a new billable call (README).
+- **v1 refuses to guess.** An unknown parameter or invalid value gets a 422 with the likely fix, never a silent correction. It costs agents a round trip, but they never report answers to a question they didn't ask.
+- **The cursor is pinned to the highest ad id when page 1 was read.** A walk never repeats or skips an ad while ingest runs. The cost: new ads only appear in a new walk.
+- **Fixed-window rate limit** (60 per clock minute, one Redis counter per key). It is simple and exact, and its `Retry-After` is exact too. The cost is a possible burst of up to 120 requests around a minute boundary.
+- **Billing counts only successful data calls,** in one transaction that locks the account's row. Errors and `/niches` are free. A repeated `Idempotency-Key` is run again but not billed.
+- **The MCP server is a thin HTTP client of v1.** It sends each call with the caller's own key, so auth, scopes, revocation, the rate limit and billing are v1's, with nothing to keep in sync. The cost is one extra hop per call.
+- **The developer page has no login** (the spec's single local user). CSRF protection, a host allow-list and the absence of CORS stop other sites; local processes are trusted.
+- **One Docker image on `php artisan serve`.** That gives one command to run everything, but it is not a production server.
 
-## Rate limit
+## How v0 and v1 coexist
 
-Fixed windows of one clock minute, one Redis counter per key; see the README ("Rate limit") for the trade-off against a sliding-window log or token bucket.
+- Both read the same `ads` table and use the same `days_active` code.
+- Both go through the same auth, rate-limit and billing middleware. One key works on both: `?api_key=` on v0 only, `Authorization: Bearer` everywhere else.
+- v0 is frozen, quirks included, and its contract test pins it.
+- The one change to v0 is a 429 (with v0's body) for the shared rate limit, because the spec requires it. That conflict is noted in the README.
 
-## MCP server
+## Shipping a breaking change to v1
 
-- **Thin client of v1, over HTTP.** The MCP server never touches the database and holds no key: each tool call is a v1 request with the caller's own `Authorization` header. Auth, scopes, revocation, the rate limit, billing and the quota are therefore v1's, with nothing to keep in sync. The cost is one extra hop per call.
-- **The key is read from every request, never stored with the session,** so revoking a key (or swapping it in the client config) applies to the next tool call.
-- **No argument checks in the MCP server.** Tool schemas are hand-written JSON Schema, not SDK/zod validation: the SDK would silently strip an unknown argument (`nich`), which is exactly v0's bug. Arguments go to v1 as sent; v1's 422 (with `did_you_mean`) becomes `corrected_arguments`. Allowed values are listed in the descriptions, and a test checks them against the Laravel enums and niche catalog, so the descriptions can't drift from what v1 accepts.
-- **Response size is a budget, not a hope.** Results are cut and measured after JSON encoding (quotes and emoji make the encoded text longer), with fallbacks that cut further, so a page has a hard upper bound. `limit` is capped at 25 in the tool even though v1 allows 100: the only argument the MCP server checks, because it is the tool's own budget.
-- **`impression_rank` is renamed `impression_rank_in_brand`** in tool output, and the descriptions say it does not compare brands. A model reading `impression_rank: 1` would otherwise call that ad the most-seen overall. ("Which pet supplies brand gets the most impressions?" can't be answered from this data, and the tools say so.)
-- **Retries:** one retry on timeout, dropped connection or 5xx, with the call's `Idempotency-Key` (sha256 of session id, JSON-RPC id, tool and arguments), so a lost answer is not billed twice. This is proved end to end: a proxy drops Laravel's first answer, and exactly one billing row is written.
+1. Build it as `/api/v2` beside v1; never change v1 in place.
+2. Send `Deprecation` and `Sunset` headers on v1, and log which keys still call it so their owners can be told.
+3. Move the MCP tools to v2 separately; tools are their own contract.
+4. Remove v1 only when its traffic is gone.
 
-## Key management and the developer page
+## What breaks first at 110M ads (5–6M active)
 
-- **One implementation, two doors.** `KeyManagement` serves both the developer page (`/developer/*`, for the hard-coded local user) and `/api/v1/keys` (for the account owning a `keys:manage` key). The page and the API can't drift; a test checks they return identical JSON for the same account.
-- **No login, so the page is protected by where requests come from:**
-  - CSRF on writes: same-origin, or a valid token.
-  - A host allow-list against DNS rebinding.
-  - No CORS on `/developer/*`.
-  - API routes never accept the session.
-  - In production this would be a real login; the endpoints already take the owner from one method, so only that method changes.
-- **A key can't hand out more than it has.** On the API a new key's scopes must be a subset of the calling key's, so a leaked `keys:manage`-only key can't mint keys that read data. The developer page is the account owner and is not limited.
-- **Usage reads `billable_calls`, the table billing writes,** and its total is `Meter::usage()`, the same count the quota is enforced with, so the page, the quota and an invoice can't disagree.
-- `last_used_at` is written on every authenticated request (Sanctum's behaviour): one extra UPDATE per call. At scale it would be sampled, or batched through Redis.
+1. **Keyword search.** v0 and v1 both search with `headline ILIKE '%q%' OR body_text ILIKE '%q%'`. No ordinary index can serve that, so every keyword search reads all 110M rows.
+   - **Fix:** a trigram (`pg_trgm`) or full-text index, or a search engine (OpenSearch), with Postgres kept as the source of truth.
+2. **v0's `total` and page numbers.** Every v0 request counts all matching rows, and page N skips N−1 pages of rows first. The v0 contract requires `total`, so it can't be dropped.
+   - **Fix:** a cached or estimated count per filter combination, a limit on how deep `page` can go, and moving heavy users to v1's cursors.
+
+Also at that size: the ingest script picks ads to deactivate with a count and a random offset over all active ads, which would need sampling by id range. And Sanctum writes `last_used_at` on every request, which would need batching.
+
+The quota count does not break: it reads at most 1,000 rows per account per month, through an index.
+
+## What comes next
+
+- A brand filter and a country filter. The eval's probes showed people ask for both, and today the tools can only say they can't.
+- More eval runs per task: one run can't tell a real change from noise.
+- A real login on the developer page.
+- A production web server (PHP-FPM behind nginx, or Octane).
