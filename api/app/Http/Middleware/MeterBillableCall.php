@@ -12,7 +12,7 @@ use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Applies the billable-call rule (README, "Billing") to one billable endpoint, named in the route:
+ * Applies the billable-call rule (REFERENCE.md, "Billing") to one billable endpoint, named in the route:
  * ->middleware(MeterBillableCall::class.':v1.ads.search').
  *
  * Before the endpoint runs: a used Idempotency-Key must belong to this same request, and an account

@@ -15,7 +15,7 @@ use Illuminate\Database\Eloquent\Collection;
  * matches the filters when its page is read is returned once. Neither sort key ever changes
  * (start dates and impression ranks are never rewritten), so a deactivation cannot move an ad
  * across a page boundary; ads with ids above the page-1 snapshot are never returned, so new
- * ads cannot push others onto a page already read. See the README.
+ * ads cannot push others onto a page already read. See REFERENCE.md, "Pagination".
  */
 final class AdSearch
 {

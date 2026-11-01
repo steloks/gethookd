@@ -12,7 +12,7 @@ Route::get('developer', fn () => view('developer'))->middleware(LocalHostOnly::c
 
 // The developer page's JSON endpoints, for the single local user (no login, as the spec allows).
 // The web group adds the session and CSRF protection; LocalHostOnly refuses other host names.
-// No rate limit and no key cap: local processes are trusted (README, "API keys and usage").
+// No rate limit and no key cap: local processes are trusted (REFERENCE.md, "API keys and usage").
 // Errors use the API's error shape (bootstrap/app.php).
 Route::prefix('developer')->middleware([LocalHostOnly::class, RejectQueryParameters::class])->group(function () {
     Route::get('keys', [DeveloperKeyController::class, 'index']);

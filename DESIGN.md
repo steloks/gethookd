@@ -1,6 +1,6 @@
 # Design
 
-Details of every rule are in the README; this page covers the decisions behind them.
+Details of every rule are in REFERENCE.md; this page covers the decisions behind them.
 
 ## Trade-offs
 
@@ -17,7 +17,7 @@ Details of every rule are in the README; this page covers the decisions behind t
 - Both read the same `ads` table and use the same `days_active` code.
 - Both go through the same auth, rate-limit and billing middleware. One key works on both: `?api_key=` on v0 only, `Authorization: Bearer` everywhere else.
 - v0 is frozen, quirks included, and its contract test pins it.
-- The one change to v0 is a 429 (with v0's body) for the shared rate limit, because the spec requires it. That conflict is noted in the README.
+- The one change to v0 is a 429 (with v0's body) for the shared rate limit, because the spec requires it. That conflict is noted in the README and REFERENCE.md.
 
 ## Shipping a breaking change to v1
 

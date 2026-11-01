@@ -24,7 +24,7 @@ Route::prefix('v0')->middleware(['auth:sanctum', RateLimitPerKey::class, 'abilit
 // RecordMcpCall notes calls from the MCP server on the key (for the developer page's connect check).
 Route::prefix('v1')->middleware(['auth:sanctum', RecordMcpCall::class, RateLimitPerKey::class])->group(function () {
     Route::middleware('abilities:'.ApiScope::SearchRead->value)->group(function () {
-        // Billable endpoints (README, "Billing"); /niches is free.
+        // Billable endpoints (REFERENCE.md, "Billing"); /niches is free.
         Route::get('ads', [V1AdController::class, 'index'])->middleware(MeterBillableCall::class.':v1.ads.search');
         Route::get('ads/{id}', [V1AdController::class, 'show'])->middleware([RejectQueryParameters::class, MeterBillableCall::class.':v1.ads.show']);
         Route::get('niches', [V1NicheController::class, 'index'])->middleware(RejectQueryParameters::class);

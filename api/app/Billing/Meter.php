@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\DB;
 
 /**
  * The billing meter: the billable_calls table is the only count of billable calls. The rule it
- * applies is written in the README ("Billing").
+ * applies is written in REFERENCE.md ("Billing").
  */
 final class Meter
 {

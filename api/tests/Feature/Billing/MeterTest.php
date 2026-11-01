@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Testing\TestResponse;
 
 /*
- * The billable-call rule, as written in the README ("Billing").
+ * The billable-call rule, as written in REFERENCE.md ("Billing").
  */
 
 function billed(): int

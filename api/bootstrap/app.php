@@ -39,7 +39,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // v0 contract: every error, of any kind, is 400 {"error":"Invalid request"}.
         // Exceptions are still reported as usual; only the response is fixed.
         // The one exception is the rate limit, which the assessment requires on v0 too: a 429 with
-        // Retry-After, keeping v0's body (see README, Assumptions).
+        // Retry-After, keeping v0's body (see REFERENCE.md, "Rate limit").
         $exceptions->render(function (Throwable $e, Request $request) {
             if ($request->is('api/v0', 'api/v0/*')) {
                 return $e instanceof ApiError && $e->errorCode === ErrorCode::RateLimited
